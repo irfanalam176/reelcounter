@@ -31,6 +31,7 @@ void main() {
       'expanded': false,
       'overlayPermissionGranted': true,
       'serviceRunning': true,
+      'backgroundActivityStatus': 'allowed',
       'accessibilityEnabled': true,
       'accessibilityServiceRunning': true,
       'detectionState': 'active',
@@ -61,10 +62,21 @@ void main() {
         case FloatingBubbleMethod.collapseFloatingBubble:
         case FloatingBubbleMethod.checkAccessibilityPermission:
         case FloatingBubbleMethod.requestAccessibilityPermission:
+        case FloatingBubbleMethod.requestBackgroundActivity:
+        case FloatingBubbleMethod.requestAutoBackgroundStart:
+        case FloatingBubbleMethod.requestPauseAppActivity:
           return true;
+        case FloatingBubbleMethod.checkBackgroundActivity:
+          return 'allowed';
+        case FloatingBubbleMethod.checkPauseAppActivity:
+          return 'enabled';
         case FloatingBubbleMethod.resetCounter:
         case FloatingBubbleMethod.getCounter:
           return counterMap;
+        case FloatingBubbleMethod.getDailyTarget:
+          return 30;
+        case FloatingBubbleMethod.setDailyTarget:
+          return call.arguments;
         case FloatingBubbleMethod.getBubbleStatus:
           return statusMap;
         case FloatingBubbleMethod.recordWatchedVideo:
@@ -134,9 +146,23 @@ void main() {
       expect(calls.single.method, FloatingBubbleMethod.getCounter);
     });
 
+    test('daily target methods', () async {
+      expect(await service.getDailyTarget(), 30);
+      expect(await service.setDailyTarget(45), 45);
+      expect(
+        calls.map((call) => call.method),
+        <String>[
+          FloatingBubbleMethod.getDailyTarget,
+          FloatingBubbleMethod.setDailyTarget,
+        ],
+      );
+      expect(calls.last.arguments, 45);
+    });
+
     test('getBubbleStatus', () async {
       final status = await service.getBubbleStatus();
       expect(status, BubbleStatus.fromMap(statusMap));
+      expect(status.backgroundActivityStatus, 'allowed');
       expect(status.accessibilityEnabled, isTrue);
       expect(status.accessibilityServiceRunning, isTrue);
       expect(status.detectionState, 'active');
@@ -156,9 +182,36 @@ void main() {
       );
     });
 
+    test('background activity methods', () async {
+      expect(await service.checkBackgroundActivity(), 'allowed');
+      expect(await service.requestBackgroundActivity(), isTrue);
+      expect(
+        calls.map((call) => call.method),
+        <String>[
+          FloatingBubbleMethod.checkBackgroundActivity,
+          FloatingBubbleMethod.requestBackgroundActivity,
+        ],
+      );
+    });
+
+    test('settings shortcut methods', () async {
+      expect(await service.requestAutoBackgroundStart(), isTrue);
+      expect(await service.checkPauseAppActivity(), 'enabled');
+      expect(await service.requestPauseAppActivity(), isTrue);
+      expect(
+        calls.map((call) => call.method),
+        <String>[
+          FloatingBubbleMethod.requestAutoBackgroundStart,
+          FloatingBubbleMethod.checkPauseAppActivity,
+          FloatingBubbleMethod.requestPauseAppActivity,
+        ],
+      );
+    });
+
     test('parses legacy status maps without new fields', () async {
       final legacy = <String, Object?>{
         ...statusMap,
+        'backgroundActivityStatus': null,
         'accessibilityEnabled': null,
         'accessibilityServiceRunning': null,
         'detectionState': null,
@@ -169,6 +222,7 @@ void main() {
         'trackingActive': false,
       };
       final status = BubbleStatus.fromMap(legacy);
+      expect(status.backgroundActivityStatus, 'unknown');
       expect(status.accessibilityEnabled, isFalse);
       expect(status.detectionState, 'waiting');
       expect(status.trackingActive, isFalse);

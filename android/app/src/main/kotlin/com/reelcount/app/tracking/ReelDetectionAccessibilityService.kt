@@ -35,23 +35,29 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     private var lastScrollSource: String? = null
     private var lastScrollX: Int = Int.MIN_VALUE
     private var lastScrollY: Int = Int.MIN_VALUE
+    private var lastTransitionDirection: Int = 0
 
     private val lastFailureAt = HashMap<String, Long>()
     private var sessionNonce: String = "session"
 
     private val detectHandler = Handler(Looper.getMainLooper())
     private var pendingDetect: Runnable? = null
+    private var pendingScrollDetect: Boolean = false
     private var detecting: Boolean = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        isConnected = true
-        sessionNonce = UUID.randomUUID().toString().replace("-", "").take(8)
-        resetSession(null)
-        VideoCounterManager.setDetectionConnected(true)
-        FloatingBubbleChannel.notifyTrackingStatusChanged()
-        FloatingBubbleService.refreshCounter(applicationContext)
-        logStage("SERVICE_CONNECTED", "session=$sessionNonce verbose=$verboseTreeDump")
+        try {
+            isConnected = true
+            sessionNonce = UUID.randomUUID().toString().replace("-", "").take(8)
+            resetSession(null)
+            VideoCounterManager.setDetectionConnected(true)
+            FloatingBubbleChannel.notifyTrackingStatusChanged()
+            FloatingBubbleService.refreshCounter(applicationContext)
+            logStage("SERVICE_CONNECTED", "session=$sessionNonce verbose=$verboseTreeDump")
+        } catch (error: RuntimeException) {
+            reportError("Accessibility service connection failed", error)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -72,8 +78,13 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
                 }
 
                 AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                    trackScroll(currentEvent)
-                    scheduleDetect(platform, packageName, 0L)
+                    trackScroll(platform, currentEvent)
+                    scheduleDetect(
+                        platform,
+                        packageName,
+                        0L,
+                        fromScroll = platform in NAVIGATION_FIX_PLATFORMS,
+                    )
                 }
 
                 AccessibilityEvent.TYPE_VIEW_CLICKED -> scheduleDetect(platform, packageName, SETTLE_DELAY_MS)
@@ -89,19 +100,38 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.w(TAG, "accessibility service interrupted")
-        markDisconnected()
+        try {
+            markDisconnected()
+        } catch (error: RuntimeException) {
+            reportError("Accessibility service interrupt failed", error)
+        }
     }
 
     override fun onDestroy() {
-        cancelPendingDetect()
-        markDisconnected()
-        super.onDestroy()
+        try {
+            cancelPendingDetect()
+            markDisconnected()
+        } catch (error: RuntimeException) {
+            reportError("Accessibility service teardown failed", error)
+        } finally {
+            super.onDestroy()
+        }
     }
 
-    private fun scheduleDetect(platform: BubblePlatform, packageName: String, delayMs: Long) {
+    private fun scheduleDetect(
+        platform: BubblePlatform,
+        packageName: String,
+        delayMs: Long,
+        fromScroll: Boolean = false,
+    ) {
+        if (!fromScroll && pendingScrollDetect && platform in NAVIGATION_FIX_PLATFORMS) {
+            return
+        }
         cancelPendingDetect()
+        pendingScrollDetect = fromScroll
         val runnable = Runnable {
             pendingDetect = null
+            pendingScrollDetect = false
             runDetect(platform, packageName)
         }
         pendingDetect = runnable
@@ -111,6 +141,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     private fun cancelPendingDetect() {
         pendingDetect?.let { detectHandler.removeCallbacks(it) }
         pendingDetect = null
+        pendingScrollDetect = false
     }
 
     private fun runDetect(platform: BubblePlatform, packageName: String) {
@@ -120,6 +151,10 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         detecting = true
         try {
             detect(platform, packageName)
+        } catch (error: SecurityException) {
+            reportError("Accessibility tree access denied", error)
+        } catch (error: RuntimeException) {
+            reportError("Detection failed: ${error.message ?: "unknown error"}", error)
         } finally {
             detecting = false
         }
@@ -145,26 +180,40 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         lastScrollSource = null
         lastScrollX = Int.MIN_VALUE
         lastScrollY = Int.MIN_VALUE
+        lastTransitionDirection = 0
     }
 
-    private fun trackScroll(event: AccessibilityEvent) {
-        if (!sessionActive && lastKey == null) {
+    private fun trackScroll(platform: BubblePlatform, event: AccessibilityEvent) {
+        val prioritized = platform in NAVIGATION_FIX_PLATFORMS
+        if (!prioritized && !sessionActive && lastKey == null) {
             return
         }
-        val magnitude = scrollMagnitude(event)
-        if (magnitude >= SCROLL_THRESHOLD) {
+        val motion = scrollMotion(event)
+        val threshold = if (platform == BubblePlatform.YOUTUBE) {
+            YOUTUBE_SCROLL_THRESHOLD
+        } else {
+            SCROLL_THRESHOLD
+        }
+        val effectiveMagnitude =
+            if (prioritized && motion.magnitude <= 0) 1 else motion.magnitude
+        if (effectiveMagnitude >= threshold) {
             pendingTransition = true
             transitionEpoch++
-            Log.d(TAG, "SCROLL_TRANSITION magnitude=$magnitude epoch=$transitionEpoch")
+            lastTransitionDirection = motion.direction
+            Log.d(
+                TAG,
+                "SCROLL_TRANSITION magnitude=${motion.magnitude} effective=$effectiveMagnitude " +
+                    "direction=${directionLabel(platform, motion.direction)} epoch=$transitionEpoch",
+            )
         }
     }
 
-    private fun scrollMagnitude(event: AccessibilityEvent): Int {
+    private fun scrollMotion(event: AccessibilityEvent): ScrollMotion {
         val deltaX = if (android.os.Build.VERSION.SDK_INT >= 28) event.scrollDeltaX else 0
         val deltaY = if (android.os.Build.VERSION.SDK_INT >= 28) event.scrollDeltaY else 0
-        var magnitude = maxOf(abs(deltaX), abs(deltaY))
+        val magnitude = maxOf(abs(deltaX), abs(deltaY))
         if (magnitude > 0) {
-            return magnitude
+            return ScrollMotion(magnitude, dominantDirection(deltaX, deltaY))
         }
 
         val sourceKey = "${event.source?.viewIdResourceName.orEmpty()}:${event.className}"
@@ -174,12 +223,27 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
             lastScrollSource = sourceKey
             lastScrollX = scrollX
             lastScrollY = scrollY
-            return 0
+            return ScrollMotion(0, 0)
         }
-        magnitude = maxOf(abs(scrollX - lastScrollX), abs(scrollY - lastScrollY))
+        val movedX = scrollX - lastScrollX
+        val movedY = scrollY - lastScrollY
         lastScrollX = scrollX
         lastScrollY = scrollY
-        return magnitude
+        return ScrollMotion(maxOf(abs(movedX), abs(movedY)), dominantDirection(movedX, movedY))
+    }
+
+    private fun dominantDirection(deltaX: Int, deltaY: Int): Int = when {
+        abs(deltaY) >= abs(deltaX) && deltaY != 0 -> deltaY
+        deltaX != 0 -> deltaX
+        else -> 0
+    }
+
+    private fun directionLabel(platform: BubblePlatform, direction: Int): String = when {
+        direction == 0 -> "unknown"
+        platform == BubblePlatform.YOUTUBE && direction < 0 -> "next"
+        platform == BubblePlatform.YOUTUBE -> "previous"
+        direction < 0 -> "down"
+        else -> "up"
     }
 
     private fun detect(platform: BubblePlatform, packageName: String) {
@@ -218,7 +282,8 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         logStage(
             "DUPLICATE_CHECK",
             "platform=${platform.key} new=$isNew revisiting=$revisiting " +
-                "pending=$pendingTransition epoch=$transitionEpoch label=${identity.label}",
+                "pending=$pendingTransition direction=${directionLabel(platform, lastTransitionDirection)} " +
+                "epoch=$transitionEpoch label=${identity.label}",
         )
         if (!isNew) {
             return
@@ -283,24 +348,45 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         while (queue.isNotEmpty() && visited < MAX_NODES) {
             val (node, depth) = queue.removeFirst()
             visited++
-            val fullscreen = coversScreen(node, screenWidth, screenHeight)
+            val id = node.viewIdResourceName.orEmpty().lowercase(Locale.US)
             val directSnapchatViewer = platform == BubblePlatform.SNAPCHAT && !node.isScrollable &&
-                node.viewIdResourceName.orEmpty().lowercase(Locale.US).let { id ->
-                    id.contains("opera_viewer") || id.contains("spotlight_container")
-                }
-            if (fullscreen && (node.isScrollable || directSnapchatViewer)) {
+                id.let { it.contains("opera_viewer") || it.contains("spotlight_container") }
+            val directYouTubeViewer = platform == BubblePlatform.YOUTUBE && !node.isScrollable &&
+                YOUTUBE_SHORTS_VIEWER_TOKENS.any(id::contains)
+            val directInstagramViewer = platform == BubblePlatform.INSTAGRAM && !node.isScrollable &&
+                INSTAGRAM_REEL_VIEWER_TOKENS.any(id::contains)
+            val directFacebookViewer = platform == BubblePlatform.FACEBOOK && !node.isScrollable &&
+                FACEBOOK_REEL_VIEWER_TOKENS.any(id::contains)
+            val directViewer = directSnapchatViewer || directYouTubeViewer ||
+                directInstagramViewer || directFacebookViewer
+            val heightRatio = if (directFacebookViewer) {
+                FACEBOOK_REEL_HEIGHT_RATIO
+            } else {
+                FULLSCREEN_HEIGHT_RATIO
+            }
+            val viewerCoversScreen = coversScreen(
+                node,
+                screenWidth,
+                screenHeight,
+                heightRatio = heightRatio,
+            )
+            if (viewerCoversScreen && (node.isScrollable || directViewer)) {
                 val idHint = findHint(node, viewerIdTokens(platform))
                 val textHint = if (idHint == null) findHint(node, viewerTextTokens(platform)) else null
                 val hint = idHint ?: textHint
                 val pager = isPagerNode(node)
-                val allowed = directSnapchatViewer || pager || idHint != null ||
+                val allowed = directViewer || pager || idHint != null ||
                     (textHint != null && platform in TEXT_HINT_PLATFORMS)
                 if (allowed) {
                     val media = countMedia(node, screenWidth, screenHeight, platform)
                     val feedGuard = hint == null && media.total > MAX_VIEWER_MEDIA_NODES
-                    if (directSnapchatViewer ||
-                        (media.total >= 1 && media.dominant >= 1 && !feedGuard)
-                    ) {
+                    val mediaAccepted = when {
+                        directSnapchatViewer -> true
+                        directInstagramViewer && media.total >= 1 -> true
+                        platform == BubblePlatform.FACEBOOK && media.letterboxed >= 1 -> true
+                        else -> media.total >= 1 && media.dominant >= 1
+                    }
+                    if (mediaAccepted && !feedGuard) {
                         val bounds = Rect().also(node::getBoundsInScreen)
                         val area = bounds.width() * bounds.height()
                         if (area > bestArea) {
@@ -309,7 +395,8 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
                                 node = node,
                                 evidence = "id=${node.viewIdResourceName} class=${node.className} " +
                                     "idHint=$idHint textHint=$textHint pager=$pager " +
-                                    "media=${media.total} dominant=${media.dominant}",
+                                    "media=${media.total} dominant=${media.dominant} " +
+                                    "letterboxed=${media.letterboxed}",
                             )
                         }
                     }
@@ -324,13 +411,19 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         return best
     }
 
-    private fun coversScreen(node: AccessibilityNodeInfo, screenWidth: Int, screenHeight: Int): Boolean {
+    private fun coversScreen(
+        node: AccessibilityNodeInfo,
+        screenWidth: Int,
+        screenHeight: Int,
+        widthRatio: Double = FULLSCREEN_WIDTH_RATIO,
+        heightRatio: Double = FULLSCREEN_HEIGHT_RATIO,
+    ): Boolean {
         val bounds = Rect().also(node::getBoundsInScreen)
         if (bounds.isEmpty) {
             return false
         }
-        return bounds.width() >= screenWidth * FULLSCREEN_WIDTH_RATIO &&
-            bounds.height() >= screenHeight * FULLSCREEN_HEIGHT_RATIO
+        return bounds.width() >= screenWidth * widthRatio &&
+            bounds.height() >= screenHeight * heightRatio
     }
 
     private fun isPagerNode(node: AccessibilityNodeInfo): Boolean {
@@ -376,6 +469,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     ): MediaCount {
         var total = 0
         var dominant = 0
+        var letterboxed = 0
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         for (index in 0 until node.childCount) {
             node.getChild(index)?.let { queue.add(it to 0) }
@@ -392,6 +486,12 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
                 ) {
                     dominant++
                 }
+                if (platform == BubblePlatform.FACEBOOK &&
+                    bounds.width() >= screenWidth * LETTERBOX_WIDTH_RATIO &&
+                    bounds.height() >= screenHeight * LETTERBOX_HEIGHT_RATIO
+                ) {
+                    letterboxed++
+                }
             }
             if (depth < MAX_MEDIA_DEPTH) {
                 for (index in 0 until current.childCount) {
@@ -399,7 +499,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
                 }
             }
         }
-        return MediaCount(total, dominant)
+        return MediaCount(total, dominant, letterboxed)
     }
 
     private fun isMediaLike(
@@ -670,9 +770,9 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     }
 
     private fun viewerIdTokens(platform: BubblePlatform): List<String> = when (platform) {
-        BubblePlatform.INSTAGRAM -> listOf("clips_viewer", "clips_media", "clips_swipe")
+        BubblePlatform.INSTAGRAM -> INSTAGRAM_REEL_VIEWER_TOKENS
         BubblePlatform.YOUTUBE -> listOf("reel_recycler", "reel_player", "shorts")
-        BubblePlatform.FACEBOOK -> emptyList()
+        BubblePlatform.FACEBOOK -> FACEBOOK_REEL_VIEWER_TOKENS
         BubblePlatform.TIKTOK -> listOf(
             "viewpager",
             "video_container",
@@ -693,7 +793,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     }
 
     private fun reportError(message: String, error: Throwable) {
-        Log.w(TAG, "$message (${error.message ?: "no details"})")
+        Log.w(TAG, "$message (${error.message ?: "no details"})", error)
         VideoCounterManager.setDetectionError(message)
     }
 
@@ -707,7 +807,13 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
 
     private data class ViewerMatch(val node: AccessibilityNodeInfo, val evidence: String)
 
-    private data class MediaCount(val total: Int, val dominant: Int)
+    private data class MediaCount(
+        val total: Int,
+        val dominant: Int,
+        val letterboxed: Int = 0,
+    )
+
+    private data class ScrollMotion(val magnitude: Int, val direction: Int)
 
     private data class ReelIdentity(val value: String, val label: String, val stable: Boolean)
 
@@ -744,8 +850,12 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         private const val MEDIA_HEIGHT_RATIO = 0.2
         private const val DOMINANT_WIDTH_RATIO = 0.5
         private const val DOMINANT_HEIGHT_RATIO = 0.5
+        private const val FACEBOOK_REEL_HEIGHT_RATIO = 0.3
+        private const val LETTERBOX_WIDTH_RATIO = 0.8
+        private const val LETTERBOX_HEIGHT_RATIO = 0.3
 
         private const val SCROLL_THRESHOLD = 60
+        private const val YOUTUBE_SCROLL_THRESHOLD = 1
         private const val SETTLE_DELAY_MS = 500L
         private const val FAILURE_LOG_INTERVAL_MS = 3000L
 
@@ -754,7 +864,36 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         private val SOCIAL_WORD_PATTERN = Regex(
             "\\b(likes?|comments?|shares?|views?|saves?|reposts?|followers?|plays?|subscribers?)\\b",
         )
-        private val TEXT_HINT_PLATFORMS = setOf(BubblePlatform.YOUTUBE, BubblePlatform.FACEBOOK)
+        private val NAVIGATION_FIX_PLATFORMS = setOf(
+            BubblePlatform.YOUTUBE,
+            BubblePlatform.INSTAGRAM,
+            BubblePlatform.FACEBOOK,
+        )
+        private val TEXT_HINT_PLATFORMS = setOf(
+            BubblePlatform.YOUTUBE,
+            BubblePlatform.INSTAGRAM,
+            BubblePlatform.FACEBOOK,
+        )
+        private val YOUTUBE_SHORTS_VIEWER_TOKENS =
+            listOf("reel_time_bar", "reel_recycler", "reel_player")
+        private val INSTAGRAM_REEL_VIEWER_TOKENS = listOf(
+            "clips_viewer",
+            "clips_media",
+            "clips_swipe",
+            "reel_viewer",
+            "reels_viewer",
+            "reel_container",
+            "reels_container",
+        )
+        private val FACEBOOK_REEL_VIEWER_TOKENS = listOf(
+            "reel_viewer",
+            "reels_viewer",
+            "reel_container",
+            "reels_container",
+            "reels_player",
+            "reel_player",
+            "reels_immersive",
+        )
         private val AUTHOR_PATTERNS = listOf(
             Regex("reel by ([^.,|]+)"),
             Regex("view (.+?)'s reels"),
@@ -820,19 +959,6 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
             private set
 
         fun isEnabled(context: Context): Boolean {
-            val globallyEnabled = try {
-                Settings.Secure.getInt(
-                    context.contentResolver,
-                    Settings.Secure.ACCESSIBILITY_ENABLED,
-                    0,
-                ) == 1
-            } catch (_: Settings.SettingNotFoundException) {
-                false
-            }
-            if (!globallyEnabled) {
-                return false
-            }
-
             val configured = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,

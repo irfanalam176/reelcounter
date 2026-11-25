@@ -5,9 +5,14 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.drawable.GradientDrawable
 import android.view.View
 import android.view.ViewOutlineProvider
+import androidx.core.content.ContextCompat
+import com.reelcount.app.R
+import com.reelcount.app.storage.BubblePreferences
 import kotlin.math.min
 
 internal class FloatingBubbleView(context: Context) : View(context) {
@@ -26,7 +31,13 @@ internal class FloatingBubbleView(context: Context) : View(context) {
     private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(34, 197, 94)
     }
+    private val brainDrawable = ContextCompat.getDrawable(context, R.drawable.ic_brain)?.mutate()
+    private val brainWidth = dp(BRAIN_SIZE_DP)
+    private val brainHeight = (brainWidth * (VIEWPORT_HEIGHT / VIEWPORT_WIDTH)).toInt()
+    private val preferences = BubblePreferences(context)
     private var count = 0
+    private var dailyTarget = preferences.dailyTarget
+    private var brainColor = BRAIN_BASE_COLOR
 
     init {
         background = backgroundDrawable
@@ -43,11 +54,14 @@ internal class FloatingBubbleView(context: Context) : View(context) {
         }
         clipToOutline = true
         isClickable = true
+        updateBrainColor()
         updateContentDescription()
     }
 
     fun setCount(value: Int) {
         count = maxOf(0, value)
+        dailyTarget = preferences.dailyTarget
+        updateBrainColor()
         updateContentDescription()
         invalidate()
     }
@@ -62,13 +76,18 @@ internal class FloatingBubbleView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val brainLeft = (width - brainWidth) / 2
+        val brainTop = dp(BRAIN_TOP_DP)
+        brainDrawable?.setBounds(brainLeft, brainTop, brainLeft + brainWidth, brainTop + brainHeight)
+        brainDrawable?.draw(canvas)
+
         val label = count.toString()
         val baseSize = when (label.length) {
-            in 0..2 -> 20
-            3 -> 18
-            4 -> 16
-            5 -> 14
-            else -> 12
+            in 0..2 -> 16
+            3 -> 14
+            4 -> 12
+            5 -> 11
+            else -> 10
         }
         var textSize = dpFloat(baseSize)
         val availableWidth = width - dpFloat(18)
@@ -78,9 +97,19 @@ internal class FloatingBubbleView(context: Context) : View(context) {
             textPaint.textSize = textSize
         }
         val fontMetrics = textPaint.fontMetrics
-        val baseline = height / 2f - (fontMetrics.ascent + fontMetrics.descent) / 2f
+        val baseline = dpFloat(COUNT_CENTER_DP) - (fontMetrics.ascent + fontMetrics.descent) / 2f
         canvas.drawText(label, width / 2f, baseline, textPaint)
         canvas.drawCircle(width - dpFloat(13), dpFloat(13), dpFloat(3), accentPaint)
+    }
+
+    private fun updateBrainColor() {
+        brainColor = when {
+            dailyTarget <= 0 -> BRAIN_BASE_COLOR
+            count <= dailyTarget / 2 -> BRAIN_BASE_COLOR
+            count <= dailyTarget -> BRAIN_GREEN
+            else -> BRAIN_OVER_LIMIT_COLOR
+        }
+        brainDrawable?.colorFilter = PorterDuffColorFilter(brainColor, PorterDuff.Mode.SRC_IN)
     }
 
     private fun updateContentDescription() {
@@ -93,5 +122,13 @@ internal class FloatingBubbleView(context: Context) : View(context) {
 
     private companion object {
         const val BUBBLE_SIZE_DP = 58
+        const val BRAIN_SIZE_DP = 30
+        const val BRAIN_TOP_DP = 6
+        const val COUNT_CENTER_DP = 45
+        const val VIEWPORT_WIDTH = 516.4220444f
+        const val VIEWPORT_HEIGHT = 459.4220444f
+        val BRAIN_BASE_COLOR = Color.rgb(67, 199, 196)
+        val BRAIN_GREEN = Color.rgb(34, 197, 94)
+        val BRAIN_OVER_LIMIT_COLOR = Color.rgb(248, 113, 113)
     }
 }

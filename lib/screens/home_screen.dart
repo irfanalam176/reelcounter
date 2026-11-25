@@ -1,18 +1,20 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import 'package:reelcount/screens/onboarding_screen.dart';
 import 'package:reelcount/services/floating_bubble_service.dart';
+import 'package:reelcount/services/onboarding_storage.dart';
 import 'package:reelcount/theme/app_theme.dart';
-import 'package:reelcount/widgets/bubble_status_card.dart';
 import 'package:reelcount/widgets/counter_card.dart';
-import 'package:reelcount/widgets/permission_card.dart';
 import 'package:reelcount/widgets/platform_stats_card.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.service});
+  const HomeScreen({super.key, this.service, this.storage});
 
   final FloatingBubbleService? service;
+  final OnboardingStorage? storage;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -20,19 +22,24 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final FloatingBubbleService _service;
+  late final OnboardingStorage _storage;
   StreamSubscription<BubbleEvent>? _events;
+  final TextEditingController _targetController = TextEditingController();
+  final FocusNode _targetFocus = FocusNode();
 
   BubbleCounter _counter = _emptyCounter();
   BubbleStatus _status = _emptyStatus();
+  int _dailyTarget = 0;
   bool _loading = true;
   bool _busy = false;
-  bool _requestingPermission = false;
-  bool _requestingAccessibility = false;
+  bool _setupNeedsAttention = false;
+  String _setupIssue = '';
 
   @override
   void initState() {
     super.initState();
     _service = widget.service ?? FloatingBubbleService();
+    _storage = widget.storage ?? SharedPreferencesOnboardingStorage();
     WidgetsBinding.instance.addObserver(this);
     _subscribeEvents();
     _refreshAll();
@@ -42,6 +49,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _events?.cancel();
+    _targetController.dispose();
+    _targetFocus.dispose();
     super.dispose();
   }
 
@@ -79,12 +88,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final counter = await _service.getCounter();
       final status = await _service.getBubbleStatus();
+      final target = await _service.getDailyTarget();
+      final pauseAppActivityStatus = await _service.checkPauseAppActivity();
+      final confirmedSteps = await _storage.confirmedSteps();
       if (!mounted) {
         return;
       }
       setState(() {
         _counter = counter;
         _status = status;
+        _dailyTarget = target;
+        final issues = _setupIssues(status, pauseAppActivityStatus, confirmedSteps);
+        _setupNeedsAttention = issues.isNotEmpty;
+        _setupIssue = issues.isEmpty ? '' : issues.first;
+        if (!_targetFocus.hasFocus) {
+          _targetController.text = target > 0 ? target.toString() : '';
+        }
         _loading = false;
       });
     } catch (error) {
@@ -97,7 +116,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _requestPermission() async {
-    setState(() => _requestingPermission = true);
     try {
       await _service.requestOverlayPermission();
       if (!mounted) {
@@ -110,31 +128,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       _showMessage(_errorMessage(error));
-    } finally {
-      if (mounted) {
-        setState(() => _requestingPermission = false);
-      }
     }
   }
 
-  Future<void> _requestAccessibilityPermission() async {
-    setState(() => _requestingAccessibility = true);
-    try {
-      await _service.requestAccessibilityPermission();
-      if (!mounted) {
-        return;
-      }
-      _showMessage('Enable ReelCount detection in Android accessibility settings.');
+  List<String> _setupIssues(
+    BubbleStatus status,
+    String pauseAppActivityStatus,
+    Set<String> confirmedSteps,
+  ) {
+    final issues = <String>[];
+    if (!status.overlayPermissionGranted) {
+      issues.add('Display over other apps');
+    }
+    if (status.backgroundActivityStatus == 'restricted' ||
+        (status.backgroundActivityStatus == 'unknown' &&
+            !confirmedSteps.contains(SetupStep.background.name))) {
+      issues.add('Background activity');
+    }
+    if (!confirmedSteps.contains(SetupStep.autoStart.name)) {
+      issues.add('Auto Background Start');
+    }
+    if (pauseAppActivityStatus == 'enabled' ||
+        (pauseAppActivityStatus == 'unknown' &&
+            !confirmedSteps.contains(SetupStep.pauseApp.name))) {
+      issues.add('Pause app activity if unused');
+    }
+    if (!status.accessibilityEnabled) {
+      issues.add('Accessibility');
+    } else if (!status.accessibilityServiceRunning) {
+      issues.add('Accessibility service connection');
+    }
+    return issues;
+  }
+
+  Future<void> _openSetup() async {
+    final completed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => OnboardingFlow(
+          service: _service,
+          storage: _storage,
+          startAtConfirmation: true,
+          onFinished: () => Navigator.of(context).pop(true),
+        ),
+      ),
+    );
+    if (completed == true && mounted) {
       await _refreshAll(showLoading: false);
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      _showMessage(_errorMessage(error));
-    } finally {
-      if (mounted) {
-        setState(() => _requestingAccessibility = false);
-      }
     }
   }
 
@@ -215,12 +254,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _errorMessage(Object error) =>
       error is FloatingBubbleException ? error.message : 'Something went wrong: $error';
 
+  Future<void> _saveDailyTarget(String value) async {
+    final parsed = int.tryParse(value.trim()) ?? 0;
+    final target = parsed < 0 ? 0 : parsed;
+    if (target == _dailyTarget) {
+      return;
+    }
+    setState(() => _dailyTarget = target);
+    try {
+      final saved = await _service.setDailyTarget(target);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _dailyTarget = saved);
+    } catch (error) {
+      if (mounted) {
+        _showMessage(_errorMessage(error));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final permission = _status.overlayPermissionGranted;
+    final accessibility = _status.accessibilityEnabled;
     final running = _status.serviceRunning;
     final visible = _status.bubbleVisible;
     final expanded = _status.expanded;
+    final missingPermissions = <String>[
+      if (!permission) 'Display over other apps',
+      if (!accessibility) 'Accessibility',
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -262,17 +326,124 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-              PermissionCard(
-                granted: permission,
-                requesting: _requestingPermission,
-                onEnable: _requestPermission,
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'DAILY REEL TARGET',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: _targetController,
+                        focusNode: _targetFocus,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        decoration: const InputDecoration(
+                          labelText:
+                              'How many Reels do you want to limit yourself to today?',
+                          border: OutlineInputBorder(),
+                          helperText: 'Set 0 for no limit',
+                        ),
+                        onChanged: _saveDailyTarget,
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              CounterCard(counter: _counter, loading: _loading),
+              CounterCard(
+                counter: _counter,
+                loading: _loading,
+                dailyTarget: _dailyTarget,
+              ),
               PlatformStatsCard(counter: _counter),
-              BubbleStatusCard(
-                status: _status,
-                onEnableAccessibility: _requestAccessibilityPermission,
-                requestingAccessibility: _requestingAccessibility,
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'AT A GLANCE',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _statusRow(
+                        icon: Icons.radar_outlined,
+                        label: 'Tracking',
+                        value: _status.trackingActive ? 'Active' : 'Inactive',
+                        active: _status.trackingActive,
+                      ),
+                      _statusRow(
+                        icon: Icons.bolt_rounded,
+                        label: 'Floating Bubble',
+                        value: running
+                            ? (visible ? 'Running · Visible' : 'Running · Hidden')
+                            : 'Stopped',
+                        active: running,
+                      ),
+                      _statusRow(
+                        icon: _setupNeedsAttention
+                            ? Icons.warning_amber_rounded
+                            : Icons.verified_rounded,
+                        label: 'Setup',
+                        value: _setupNeedsAttention
+                            ? 'Needs attention'
+                            : 'All configurations ready',
+                        active: !_setupNeedsAttention,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Card(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(18, 18, 18, 0),
+                      child: Text(
+                        'SETTINGS',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.3,
+                        ),
+                      ),
+                    ),
+                    ListTile(
+                      leading: Icon(
+                        Icons.tune_rounded,
+                        color: _setupNeedsAttention ? AppColors.danger : AppColors.green,
+                      ),
+                      title: const Text(
+                        'Setup & Permissions',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        _setupNeedsAttention
+                            ? 'Fix: $_setupIssue'
+                            : 'Review permissions and device settings',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: _openSetup,
+                    ),
+                  ],
+                ),
               ),
               Card(
                 child: Padding(
@@ -304,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 label: 'Start Bubble',
                                 icon: Icons.play_arrow_rounded,
                                 filled: true,
-                                enabled: permission && !running,
+                                enabled: missingPermissions.isEmpty && !running,
                                 onPressed: () => _runBubbleAction(_service.startFloatingBubble),
                               ),
                               _control(
@@ -336,6 +507,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           );
                         },
                       ),
+                      if (!running && missingPermissions.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          'Start Bubble disabled: missing ${missingPermissions.join(' and ')} '
+                          '${missingPermissions.length == 1 ? 'permission' : 'permissions'}. '
+                          'Grant in Android Settings.',
+                          style: const TextStyle(color: AppColors.danger, fontSize: 12),
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       SizedBox(
                         width: double.infinity,
@@ -356,8 +536,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
-                  'Enable the ReelCount accessibility service to detect reels automatically. '
-                  'No manual count controls are exposed.',
+                  'ReelCount counts reels automatically. Setup and permission controls '
+                  'live in Settings.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.muted, fontSize: 11),
                 ),
@@ -367,6 +547,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _statusRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required bool active,
+  }) {
+    final color = active ? AppColors.green : AppColors.muted;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 19),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                Text(
+                  value,
+                  style: TextStyle(color: active ? AppColors.text : AppColors.danger, fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: active ? AppColors.green : AppColors.border,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ],
       ),
     );
   }

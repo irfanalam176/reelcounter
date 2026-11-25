@@ -4,13 +4,28 @@ import 'package:reelcount/services/floating_bubble_service.dart';
 import 'package:reelcount/theme/app_theme.dart';
 
 class CounterCard extends StatelessWidget {
-  const CounterCard({super.key, required this.counter, required this.loading});
+  const CounterCard({
+    super.key,
+    required this.counter,
+    required this.loading,
+    this.dailyTarget = 0,
+  });
 
   final BubbleCounter counter;
   final bool loading;
+  final int dailyTarget;
 
   @override
   Widget build(BuildContext context) {
+    final progress = dailyTarget > 0 ? counter.total / dailyTarget : 0.0;
+    final progressColor = dailyTarget <= 0
+        ? AppColors.muted
+        : progress > 1
+            ? AppColors.danger
+            : progress > 0.5
+                ? AppColors.green
+                : AppColors.brain;
+
     return Card(
       child: Container(
         width: double.infinity,
@@ -75,6 +90,32 @@ class CounterCard extends StatelessWidget {
               'Videos detected today  ·  ${counter.date}',
               style: const TextStyle(color: AppColors.muted, fontSize: 13),
             ),
+            if (dailyTarget > 0) ...[
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Daily limit $dailyTarget',
+                    style: const TextStyle(color: AppColors.muted, fontSize: 13),
+                  ),
+                  Text(
+                    '${(progress * 100).round()}% used',
+                    style: TextStyle(color: progressColor, fontSize: 13, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: progress.clamp(0.0, 1.0),
+                  minHeight: 8,
+                  backgroundColor: AppColors.surface,
+                  color: progressColor,
+                ),
+              ),
+            ],
           ],
         ),
       ),

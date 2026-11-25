@@ -1,12 +1,15 @@
 package com.reelcount.app.communication
 
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import com.reelcount.app.overlay.FloatingBubbleService
 import com.reelcount.app.storage.BubblePreferences
@@ -16,6 +19,7 @@ import com.reelcount.app.tracking.VideoCounterManager
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.util.Locale
 
 object FloatingBubbleChannel {
     const val METHOD_CHANNEL = "com.reelcount.app/floating_bubble"
@@ -32,10 +36,17 @@ object FloatingBubbleChannel {
         const val COLLAPSE_FLOATING_BUBBLE = "collapseFloatingBubble"
         const val RESET_COUNTER = "resetCounter"
         const val GET_COUNTER = "getCounter"
+        const val GET_DAILY_TARGET = "getDailyTarget"
+        const val SET_DAILY_TARGET = "setDailyTarget"
         const val GET_BUBBLE_STATUS = "getBubbleStatus"
         const val RECORD_WATCHED_VIDEO = "recordWatchedVideo"
         const val CHECK_ACCESSIBILITY_PERMISSION = "checkAccessibilityPermission"
         const val REQUEST_ACCESSIBILITY_PERMISSION = "requestAccessibilityPermission"
+        const val CHECK_BACKGROUND_ACTIVITY = "checkBackgroundActivity"
+        const val REQUEST_BACKGROUND_ACTIVITY = "requestBackgroundActivity"
+        const val REQUEST_AUTO_BACKGROUND_START = "requestAutoBackgroundStart"
+        const val CHECK_PAUSE_APP_ACTIVITY = "checkPauseAppActivity"
+        const val REQUEST_PAUSE_APP_ACTIVITY = "requestPauseAppActivity"
     }
 
     object Event {
@@ -58,6 +69,12 @@ object FloatingBubbleChannel {
     private const val ERROR_INVALID_ARGUMENTS = "INVALID_ARGUMENTS"
     private const val ERROR_STORAGE = "STORAGE_UNAVAILABLE"
     private const val ERROR_TRACKING = "TRACKING_OPERATION_FAILED"
+    private const val BACKGROUND_ACTIVITY_ALLOWED = "allowed"
+    private const val BACKGROUND_ACTIVITY_RESTRICTED = "restricted"
+    private const val BACKGROUND_ACTIVITY_UNKNOWN = "unknown"
+    private const val PAUSE_APP_ACTIVITY_DISABLED = "disabled"
+    private const val PAUSE_APP_ACTIVITY_ENABLED = "enabled"
+    private const val PAUSE_APP_ACTIVITY_UNKNOWN = "unknown"
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var applicationContext: Context? = null
@@ -209,6 +226,23 @@ object FloatingBubbleChannel {
             Method.GET_COUNTER ->
                 safeStorage(result) { BubblePreferences(context).getCounts().toMap() }
 
+            Method.GET_DAILY_TARGET ->
+                safeStorage(result) { BubblePreferences(context).dailyTarget }
+
+            Method.SET_DAILY_TARGET -> {
+                val rawTarget = arguments as? Number
+                if (rawTarget == null) {
+                    result.error(ERROR_INVALID_ARGUMENTS, "target must be a number", null)
+                } else {
+                    safeStorage(result) {
+                        BubblePreferences(context).dailyTarget = rawTarget.toInt()
+                        FloatingBubbleService.refreshCounter(context)
+                        notifyCounterChanged()
+                        BubblePreferences(context).dailyTarget
+                    }
+                }
+            }
+
             Method.GET_BUBBLE_STATUS ->
                 safeStorage(result) { readStatus(context) }
 
@@ -243,6 +277,21 @@ object FloatingBubbleChannel {
                 result.success(ReelDetectionAccessibilityService.isEnabled(context))
 
             Method.REQUEST_ACCESSIBILITY_PERMISSION -> result.success(openAccessibilitySettings(context))
+
+            Method.CHECK_BACKGROUND_ACTIVITY ->
+                result.success(backgroundActivityStatus(context))
+
+            Method.REQUEST_BACKGROUND_ACTIVITY ->
+                result.success(openBackgroundActivitySettings(context))
+
+            Method.REQUEST_AUTO_BACKGROUND_START ->
+                result.success(openAutoBackgroundStartSettings(context))
+
+            Method.CHECK_PAUSE_APP_ACTIVITY ->
+                result.success(pauseAppActivityStatus(context))
+
+            Method.REQUEST_PAUSE_APP_ACTIVITY ->
+                result.success(openPauseAppActivitySettings(context))
 
             else -> result.notImplemented()
         }
@@ -351,6 +400,228 @@ object FloatingBubbleChannel {
         }
     }
 
+    private fun backgroundActivityStatus(context: Context): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return BACKGROUND_ACTIVITY_UNKNOWN
+        }
+        val powerManager = context.getSystemService(PowerManager::class.java)
+            ?: return BACKGROUND_ACTIVITY_UNKNOWN
+        return if (powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
+            BACKGROUND_ACTIVITY_ALLOWED
+        } else {
+            BACKGROUND_ACTIVITY_RESTRICTED
+        }
+    }
+
+    private fun openBackgroundActivitySettings(context: Context): Boolean {
+        val packageUri = Uri.parse("package:${context.packageName}")
+        val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = packageUri
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val list = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val details = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = packageUri
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return startSettingsIntent(context, request) ||
+            startSettingsIntent(context, list) ||
+            startSettingsIntent(context, details)
+    }
+
+    private fun openAutoBackgroundStartSettings(context: Context): Boolean {
+        val brand = "${Build.BRAND} ${Build.MANUFACTURER}".lowercase(Locale.ROOT)
+        val intents = when {
+            brand.contains("xiaomi") || brand.contains("poco") || brand.contains("redmi") ->
+                listOf(
+                    componentIntent(
+                        "com.miui.securitycenter",
+                        "com.miui.permcenter.autostart.AutoStartManagementActivity",
+                    ),
+                )
+
+            brand.contains("asus") ->
+                listOf(
+                    componentIntent(
+                        "com.asus.mobilemanager",
+                        "com.asus.mobilemanager.autostart.AutoStartActivity",
+                    ),
+                    componentIntent(
+                        "com.asus.mobilemanager",
+                        "com.asus.mobilemanager.powersaver.PowerSaverSettings",
+                    ),
+                )
+
+            brand.contains("letv") ->
+                listOf(
+                    componentIntent(
+                        "com.letv.android.letvsafe",
+                        "com.letv.android.letvsafe.AutobootManageActivity",
+                    ),
+                )
+
+            brand.contains("honor") ->
+                listOf(
+                    componentIntent(
+                        "com.huawei.systemmanager",
+                        "com.huawei.systemmanager.optimize.process.ProtectActivity",
+                    ),
+                )
+
+            brand.contains("huawei") ->
+                listOf(
+                    componentIntent(
+                        "com.huawei.systemmanager",
+                        "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+                    ),
+                    componentIntent(
+                        "com.huawei.systemmanager",
+                        "com.huawei.systemmanager.optimize.process.ProtectActivity",
+                    ),
+                )
+
+            brand.contains("oppo") || brand.contains("realme") ->
+                listOf(
+                    componentIntent(
+                        "com.coloros.safecenter",
+                        "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+                    ),
+                    componentIntent(
+                        "com.oppo.safe",
+                        "com.oppo.safe.permission.startup.StartupAppListActivity",
+                    ),
+                    componentIntent(
+                        "com.coloros.safecenter",
+                        "com.coloros.safecenter.startupapp.StartupAppListActivity",
+                    ),
+                )
+
+            brand.contains("vivo") || brand.contains("iqoo") ->
+                listOf(
+                    componentIntent(
+                        "com.vivo.permissionmanager",
+                        "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+                    ),
+                    componentIntent(
+                        "com.iqoo.secure",
+                        "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
+                    ),
+                    componentIntent(
+                        "com.iqoo.secure",
+                        "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager",
+                    ),
+                )
+
+            brand.contains("nokia") ->
+                listOf(
+                    componentIntent(
+                        "com.evenwell.powersaving.g3",
+                        "com.evenwell.powersaving.g3.exception.PowerSaverExceptionActivity",
+                    ),
+                )
+
+            brand.contains("samsung") ->
+                listOf(
+                    componentIntent(
+                        "com.samsung.android.lool",
+                        "com.samsung.android.sm.ui.battery.BatteryActivity",
+                    ),
+                    componentIntent(
+                        "com.samsung.android.lool",
+                        "com.samsung.android.sm.battery.ui.usage.CheckableAppListActivity",
+                    ),
+                    componentIntent(
+                        "com.samsung.android.lool",
+                        "com.samsung.android.sm.battery.ui.BatteryActivity",
+                    ),
+                )
+
+            brand.contains("oneplus") ->
+                listOf(
+                    componentIntent(
+                        "com.oneplus.security",
+                        "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity",
+                    ),
+                )
+
+            brand.contains("infinix") || brand.contains("tecno") ->
+                listOf(
+                    componentIntent(
+                        "com.transsion.phonemaster",
+                        "com.cyin.himgr.autostart.AutoStartActivity",
+                    ),
+                )
+
+            else -> emptyList()
+        }
+        return intents.any { safeStartSettingsIntent(context, it) } ||
+            safeStartSettingsIntent(context, appDetailsIntent(context)) ||
+            safeStartSettingsIntent(
+                context,
+                Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+    }
+
+    private fun componentIntent(packageName: String, className: String): Intent =
+        Intent().setComponent(ComponentName(packageName, className))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    private fun appDetailsIntent(context: Context): Intent =
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+    private fun pauseAppActivityStatus(context: Context): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return PAUSE_APP_ACTIVITY_UNKNOWN
+        }
+        return try {
+            if (context.packageManager.isAutoRevokeWhitelisted(context.packageName)) {
+                PAUSE_APP_ACTIVITY_DISABLED
+            } else {
+                PAUSE_APP_ACTIVITY_ENABLED
+            }
+        } catch (_: Exception) {
+            PAUSE_APP_ACTIVITY_UNKNOWN
+        }
+    }
+
+    private fun openPauseAppActivitySettings(context: Context): Boolean =
+        safeStartSettingsIntent(context, appDetailsIntent(context)) ||
+            safeStartSettingsIntent(
+                context,
+                Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+
+    private fun safeStartSettingsIntent(context: Context, intent: Intent): Boolean =
+        try {
+            if (intent.component != null &&
+                context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY).isEmpty()
+            ) {
+                false
+            } else {
+                context.startActivity(intent)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+
+    private fun startSettingsIntent(context: Context, intent: Intent): Boolean =
+        try {
+            context.startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
+
     private fun readStatus(context: Context): Map<String, Any> {
         val preferences = BubblePreferences(context)
         val permissionGranted = hasOverlayPermission(context)
@@ -360,6 +631,7 @@ object FloatingBubbleChannel {
         status["bubbleVisible"] = bubbleVisible
         status["expanded"] = preferences.isExpanded && bubbleVisible
         status["overlayPermissionGranted"] = permissionGranted
+        status["backgroundActivityStatus"] = backgroundActivityStatus(context)
         status["serviceRunning"] = serviceRunning
         val accessibilityEnabled = ReelDetectionAccessibilityService.isEnabled(context)
         val serviceConnected = ReelDetectionAccessibilityService.isConnected
@@ -402,6 +674,7 @@ object FloatingBubbleChannel {
             status["bubbleVisible"],
             status["expanded"],
             status["overlayPermissionGranted"],
+            status["backgroundActivityStatus"],
             status["serviceRunning"],
             status["accessibilityEnabled"],
             status["accessibilityServiceRunning"],

@@ -93,6 +93,10 @@ class BubblePreferences(context: Context) {
         }
         set(value) = edit { putString(KEY_SELECTED_PLATFORM, value.key) }
 
+    var dailyTarget: Int
+        get() = preferences.getInt(KEY_DAILY_TARGET, DEFAULT_DAILY_TARGET).coerceAtLeast(0)
+        set(value) = edit { putInt(KEY_DAILY_TARGET, maxOf(0, value)) }
+
     val lastCounterDate: String
         get() {
             ensureToday()
@@ -205,6 +209,8 @@ class BubblePreferences(context: Context) {
         const val KEY_ACTIVE = "bubble_active"
         const val KEY_EXPANDED = "bubble_expanded"
         const val KEY_SELECTED_PLATFORM = "selected_platform"
+        const val KEY_DAILY_TARGET = "daily_target"
+        const val DEFAULT_DAILY_TARGET = 50
         const val KEY_PROCESSED_EVENTS = "processed_event_ids"
     }
 }

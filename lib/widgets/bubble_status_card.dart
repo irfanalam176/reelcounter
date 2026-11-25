@@ -9,11 +9,25 @@ class BubbleStatusCard extends StatelessWidget {
     required this.status,
     this.onEnableAccessibility,
     this.requestingAccessibility = false,
+    this.onOpenBackgroundActivity,
+    this.requestingBackgroundActivity = false,
+    this.onEnableAutoBackgroundStart,
+    this.requestingAutoBackgroundStart = false,
+    this.onDisablePauseAppActivity,
+    this.requestingPauseAppActivity = false,
+    this.pauseAppActivityStatus = 'unknown',
   });
 
   final BubbleStatus status;
   final VoidCallback? onEnableAccessibility;
   final bool requestingAccessibility;
+  final VoidCallback? onOpenBackgroundActivity;
+  final bool requestingBackgroundActivity;
+  final VoidCallback? onEnableAutoBackgroundStart;
+  final bool requestingAutoBackgroundStart;
+  final VoidCallback? onDisablePauseAppActivity;
+  final bool requestingPauseAppActivity;
+  final String pauseAppActivityStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +38,29 @@ class BubbleStatusCard extends StatelessWidget {
       'error' => 'Error',
       'checking' => 'Checking…',
       _ => 'Waiting',
+    };
+    final backgroundAllowed = status.backgroundActivityStatus == 'allowed';
+    final backgroundLabel = switch (status.backgroundActivityStatus) {
+      'allowed' => 'Allowed',
+      'restricted' => 'Restricted',
+      _ => 'Unknown',
+    };
+    final backgroundSubtitle = switch (status.backgroundActivityStatus) {
+      'allowed' => 'Unrestricted battery usage is enabled.',
+      'restricted' =>
+        'Allow background activity or select Unrestricted battery usage in Android settings.',
+      _ => 'This device does not expose a reliable background activity status.',
+    };
+    final pauseAppActivityLabel = switch (pauseAppActivityStatus) {
+      'disabled' => 'Off',
+      'enabled' => 'On',
+      _ => 'Unknown',
+    };
+    final pauseAppActivitySubtitle = switch (pauseAppActivityStatus) {
+      'disabled' => 'Pause app activity if unused is off for ReelCount.',
+      'enabled' =>
+        'Turn OFF Pause app activity if unused in Android App info.',
+      _ => 'Check Pause app activity if unused in Android App info.',
     };
 
     return Card(
@@ -63,6 +100,29 @@ class BubbleStatusCard extends StatelessWidget {
               active: status.accessibilityEnabled,
             ),
             _StatusRow(
+              icon: Icons.battery_charging_full_outlined,
+              label: 'Background Activity',
+              value: backgroundLabel,
+              subtitle: backgroundSubtitle,
+              active: backgroundAllowed,
+              error: status.backgroundActivityStatus == 'restricted',
+            ),
+            _StatusRow(
+              icon: Icons.flash_on_outlined,
+              label: 'Auto Background Start',
+              value: 'Manual',
+              subtitle: 'Enable Auto-start for ReelCount in your device settings.',
+              active: false,
+            ),
+            _StatusRow(
+              icon: Icons.pause_circle_outline,
+              label: 'Pause App Activity If Unused',
+              value: pauseAppActivityLabel,
+              subtitle: pauseAppActivitySubtitle,
+              active: pauseAppActivityStatus == 'disabled',
+              error: pauseAppActivityStatus == 'enabled',
+            ),
+            _StatusRow(
               icon: Icons.radar_outlined,
               label: 'Detection Engine',
               value: detectionLabel,
@@ -88,6 +148,49 @@ class BubbleStatusCard extends StatelessWidget {
                   icon: const Icon(Icons.settings_accessibility_rounded, size: 18),
                   label: Text(
                     requestingAccessibility ? 'Opening settings…' : 'Enable Accessibility',
+                  ),
+                ),
+              ),
+            ],
+            if (!backgroundAllowed && onOpenBackgroundActivity != null) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: requestingBackgroundActivity ? null : onOpenBackgroundActivity,
+                  icon: const Icon(Icons.battery_charging_full_outlined, size: 18),
+                  label: Text(
+                    requestingBackgroundActivity
+                        ? 'Opening settings…'
+                        : 'Allow Background Activity',
+                  ),
+                ),
+              ),
+            ],
+            if (onEnableAutoBackgroundStart != null) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed:
+                      requestingAutoBackgroundStart ? null : onEnableAutoBackgroundStart,
+                  icon: const Icon(Icons.flash_on_outlined, size: 18),
+                  label: Text(
+                    requestingAutoBackgroundStart ? 'Opening settings…' : 'Enable',
+                  ),
+                ),
+              ),
+            ],
+            if (onDisablePauseAppActivity != null) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed:
+                      requestingPauseAppActivity ? null : onDisablePauseAppActivity,
+                  icon: const Icon(Icons.pause_circle_outline, size: 18),
+                  label: Text(
+                    requestingPauseAppActivity ? 'Opening settings…' : 'Disable',
                   ),
                 ),
               ),

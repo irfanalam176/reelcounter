@@ -13,10 +13,17 @@ class FloatingBubbleMethod {
   static const collapseFloatingBubble = 'collapseFloatingBubble';
   static const resetCounter = 'resetCounter';
   static const getCounter = 'getCounter';
+  static const getDailyTarget = 'getDailyTarget';
+  static const setDailyTarget = 'setDailyTarget';
   static const getBubbleStatus = 'getBubbleStatus';
   static const recordWatchedVideo = 'recordWatchedVideo';
   static const checkAccessibilityPermission = 'checkAccessibilityPermission';
   static const requestAccessibilityPermission = 'requestAccessibilityPermission';
+  static const checkBackgroundActivity = 'checkBackgroundActivity';
+  static const requestBackgroundActivity = 'requestBackgroundActivity';
+  static const requestAutoBackgroundStart = 'requestAutoBackgroundStart';
+  static const checkPauseAppActivity = 'checkPauseAppActivity';
+  static const requestPauseAppActivity = 'requestPauseAppActivity';
 }
 
 class FloatingBubbleEventName {
@@ -160,6 +167,7 @@ class BubbleStatus {
     required this.overlayPermissionGranted,
     required this.serviceRunning,
     required this.counter,
+    this.backgroundActivityStatus = 'unknown',
     this.accessibilityEnabled = false,
     this.accessibilityServiceRunning = false,
     this.detectionState = 'waiting',
@@ -170,6 +178,7 @@ class BubbleStatus {
   final bool expanded;
   final bool overlayPermissionGranted;
   final bool serviceRunning;
+  final String backgroundActivityStatus;
   final bool accessibilityEnabled;
   final bool accessibilityServiceRunning;
   final String detectionState;
@@ -192,6 +201,11 @@ class BubbleStatus {
       overlayPermissionGranted: _readBool(map, 'overlayPermissionGranted'),
       serviceRunning: _readBool(map, 'serviceRunning'),
       counter: BubbleCounter.fromMap(map['counter']),
+      backgroundActivityStatus: _readStringOr(
+        map,
+        'backgroundActivityStatus',
+        'unknown',
+      ),
       accessibilityEnabled: _readBoolOr(map, 'accessibilityEnabled', false),
       accessibilityServiceRunning: _readBoolOr(
         map,
@@ -216,6 +230,7 @@ class BubbleStatus {
         'expanded': expanded,
         'overlayPermissionGranted': overlayPermissionGranted,
         'serviceRunning': serviceRunning,
+        'backgroundActivityStatus': backgroundActivityStatus,
         'accessibilityEnabled': accessibilityEnabled,
         'accessibilityServiceRunning': accessibilityServiceRunning,
         'detectionState': detectionState,
@@ -235,6 +250,7 @@ class BubbleStatus {
           expanded == other.expanded &&
           overlayPermissionGranted == other.overlayPermissionGranted &&
           serviceRunning == other.serviceRunning &&
+          backgroundActivityStatus == other.backgroundActivityStatus &&
           accessibilityEnabled == other.accessibilityEnabled &&
           accessibilityServiceRunning == other.accessibilityServiceRunning &&
           detectionState == other.detectionState &&
@@ -247,6 +263,7 @@ class BubbleStatus {
         expanded,
         overlayPermissionGranted,
         serviceRunning,
+        backgroundActivityStatus,
         accessibilityEnabled,
         accessibilityServiceRunning,
         detectionState,
@@ -388,6 +405,12 @@ class FloatingBubbleService {
   Future<BubbleCounter> getCounter() =>
       _invoke(FloatingBubbleMethod.getCounter, BubbleCounter.fromMap);
 
+  Future<int> getDailyTarget() =>
+      _invoke(FloatingBubbleMethod.getDailyTarget, _readIntValue);
+
+  Future<int> setDailyTarget(int target) =>
+      _invoke(FloatingBubbleMethod.setDailyTarget, _readIntValue, target);
+
   Future<BubbleStatus> getBubbleStatus() =>
       _invoke(FloatingBubbleMethod.getBubbleStatus, BubbleStatus.fromMap);
 
@@ -396,6 +419,21 @@ class FloatingBubbleService {
 
   Future<bool> requestAccessibilityPermission() =>
       _invoke(FloatingBubbleMethod.requestAccessibilityPermission, _readBoolValue);
+
+  Future<String> checkBackgroundActivity() =>
+      _invoke(FloatingBubbleMethod.checkBackgroundActivity, _readStringValue);
+
+  Future<bool> requestBackgroundActivity() =>
+      _invoke(FloatingBubbleMethod.requestBackgroundActivity, _readBoolValue);
+
+  Future<bool> requestAutoBackgroundStart() =>
+      _invoke(FloatingBubbleMethod.requestAutoBackgroundStart, _readBoolValue);
+
+  Future<String> checkPauseAppActivity() =>
+      _invoke(FloatingBubbleMethod.checkPauseAppActivity, _readStringValue);
+
+  Future<bool> requestPauseAppActivity() =>
+      _invoke(FloatingBubbleMethod.requestPauseAppActivity, _readBoolValue);
 
   Future<VideoRecordResult> recordWatchedVideo(
     ReelPlatform platform, {
@@ -470,6 +508,13 @@ String _readString(Map<Object?, Object?> map, String key) {
   throw FormatException('Expected string for $key', value);
 }
 
+String _readStringValue(Object? value) {
+  if (value is String) {
+    return value;
+  }
+  throw FormatException('Expected string result', value);
+}
+
 bool _readBool(Map<Object?, Object?> map, String key) {
   final value = map[key];
   if (value is bool) {
@@ -493,4 +538,14 @@ bool _readBoolValue(Object? value) {
     return value;
   }
   throw FormatException('Expected bool result', value);
+}
+
+int _readIntValue(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  throw FormatException('Expected int result', value);
 }

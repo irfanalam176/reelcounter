@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:reelcount/main.dart';
 import 'package:reelcount/screens/home_screen.dart';
 import 'package:reelcount/services/floating_bubble_service.dart';
+import 'package:reelcount/services/onboarding_storage.dart';
 import 'package:reelcount/theme/app_theme.dart';
 
 void main() {
@@ -17,6 +18,7 @@ void main() {
 
   late Map<String, Object?> counter;
   late Map<String, Object?> status;
+  final methodCalls = <String>[];
 
   Map<String, Object?> buildCounter({required int total, required int instagram}) =>
       <String, Object?>{
@@ -34,6 +36,8 @@ void main() {
     required bool bubbleRunning,
     required bool accessibilityEnabled,
     required String detectionState,
+    String backgroundActivityStatus = 'allowed',
+    bool overlayPermissionGranted = true,
   }) {
     final bubbleVisible = bubbleRunning;
     final active = detectionState == 'active';
@@ -41,8 +45,9 @@ void main() {
     return <String, Object?>{
       'bubbleVisible': bubbleVisible,
       'expanded': false,
-      'overlayPermissionGranted': true,
+      'overlayPermissionGranted': overlayPermissionGranted,
       'serviceRunning': bubbleRunning,
+      'backgroundActivityStatus': backgroundActivityStatus,
       'accessibilityEnabled': accessibilityEnabled,
       'accessibilityServiceRunning': accessibilityEnabled && active,
       'detectionState': detectionState,
@@ -55,7 +60,31 @@ void main() {
     };
   }
 
+  Future<void> pumpDashboard(WidgetTester tester) async {
+    await tester.pumpWidget(
+      ReelCountApp(
+        key: UniqueKey(),
+        storage: InMemoryOnboardingStorage(completed: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapText(WidgetTester tester, String text) async {
+    final finder = find.text(text);
+    await tester.ensureVisible(finder);
+    await tester.pumpAndSettle();
+    await tester.tap(finder);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> openSetupChecklist(WidgetTester tester) async {
+    await tapText(tester, 'Setup & Permissions');
+    expect(find.text('Have you completed all these configurations?'), findsOneWidget);
+  }
+
   setUp(() {
+    methodCalls.clear();
     counter = buildCounter(total: 127, instagram: 42);
     status = buildStatus(
       counterMap: counter,
@@ -66,11 +95,18 @@ void main() {
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(methodChannel, (call) async {
+      methodCalls.add(call.method);
       switch (call.method) {
         case FloatingBubbleMethod.getCounter:
           return counter;
+        case FloatingBubbleMethod.getDailyTarget:
+          return 50;
+        case FloatingBubbleMethod.setDailyTarget:
+          return call.arguments;
         case FloatingBubbleMethod.getBubbleStatus:
           return status;
+        case FloatingBubbleMethod.checkPauseAppActivity:
+          return 'enabled';
         default:
           return true;
       }
@@ -93,22 +129,119 @@ void main() {
   });
 
   testWidgets('dashboard reports independent statuses', (tester) async {
-    await tester.pumpWidget(const ReelCountApp());
-    await tester.pumpAndSettle();
+    await pumpDashboard(tester);
 
     expect(find.text('ReelCount'), findsWidgets);
     expect(find.text('127'), findsOneWidget);
     expect(find.text('42'), findsOneWidget);
-    expect(find.text('Running'), findsOneWidget);
-    expect(find.text('Disabled'), findsOneWidget);
-    expect(find.text('Waiting'), findsOneWidget);
+    expect(find.text('Running · Visible'), findsOneWidget);
     expect(find.text('Inactive'), findsOneWidget);
-    expect(find.text('Enable Accessibility'), findsOneWidget);
-    expect(find.text('Overlay permission ready'), findsOneWidget);
+    expect(find.text('Setup & Permissions'), findsOneWidget);
+    expect(find.text('Needs attention'), findsOneWidget);
+    expect(find.text('50'), findsOneWidget);
+    expect(find.text('Enable Accessibility'), findsNothing);
+    expect(find.text('Overlay permission ready'), findsNothing);
     expect(find.byIcon(Icons.add), findsNothing);
     expect(find.byIcon(Icons.remove), findsNothing);
     expect(find.text('+1'), findsNothing);
     expect(find.text('-1'), findsNothing);
+  });
+
+  testWidgets('background setup status and settings action', (tester) async {
+    status = buildStatus(
+      counterMap: counter,
+      bubbleRunning: true,
+      accessibilityEnabled: true,
+      detectionState: 'active',
+      backgroundActivityStatus: 'restricted',
+    );
+    await pumpDashboard(tester);
+    await openSetupChecklist(tester);
+
+    await tapText(tester, 'Background Activity & Battery');
+
+    expect(
+      find.text('Background activity is restricted for ReelCount.'),
+      findsOneWidget,
+    );
+    await tapText(tester, 'Open Battery Settings');
+    expect(methodCalls, contains(FloatingBubbleMethod.requestBackgroundActivity));
+
+    status = buildStatus(
+      counterMap: counter,
+      bubbleRunning: true,
+      accessibilityEnabled: true,
+      detectionState: 'active',
+      backgroundActivityStatus: 'unknown',
+    );
+    await pumpDashboard(tester);
+    await openSetupChecklist(tester);
+    await tapText(tester, 'Background Activity & Battery');
+
+    expect(
+      find.text('Your device does not share a reliable background activity status.'),
+      findsOneWidget,
+    );
+    expect(find.text('I Checked This Setting'), findsOneWidget);
+  });
+
+  testWidgets('background setting shortcuts open system settings', (tester) async {
+    await pumpDashboard(tester);
+    await openSetupChecklist(tester);
+
+    await tapText(tester, 'Auto Background Start');
+    await tapText(tester, 'Open Auto-Start Settings');
+    expect(methodCalls, contains(FloatingBubbleMethod.requestAutoBackgroundStart));
+
+    await tapText(tester, 'I Turned It On / Not Available');
+    await tapText(tester, 'Continue');
+    await tapText(tester, 'Open App Info Settings');
+    expect(methodCalls, contains(FloatingBubbleMethod.requestPauseAppActivity));
+  });
+
+  testWidgets('daily target drives progress', (tester) async {
+    await pumpDashboard(tester);
+
+    await tester.enterText(find.byType(TextField), '30');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Daily limit 30'), findsOneWidget);
+    expect(find.textContaining('% used'), findsOneWidget);
+  });
+
+  testWidgets('start bubble requires every permission', (tester) async {
+    status = buildStatus(
+      counterMap: counter,
+      bubbleRunning: false,
+      accessibilityEnabled: false,
+      detectionState: 'waiting',
+    );
+    await pumpDashboard(tester);
+
+    FilledButton startButton() => tester.widget<FilledButton>(
+          find.ancestor(
+            of: find.text('Start Bubble'),
+            matching: find.byType(FilledButton),
+          ),
+        );
+
+    expect(startButton().onPressed, isNull);
+    expect(
+      find.textContaining('Start Bubble disabled: missing Accessibility permission'),
+      findsOneWidget,
+    );
+
+    status = buildStatus(
+      counterMap: counter,
+      bubbleRunning: false,
+      accessibilityEnabled: true,
+      detectionState: 'active',
+    );
+    await tester.tap(find.byIcon(Icons.refresh_rounded));
+    await tester.pumpAndSettle();
+
+    expect(startButton().onPressed, isNotNull);
+    expect(find.textContaining('Start Bubble disabled'), findsNothing);
   });
 
   testWidgets('tracking is active only with detection and bubble', (tester) async {
@@ -119,11 +252,9 @@ void main() {
       detectionState: 'active',
     );
 
-    await tester.pumpWidget(const ReelCountApp());
-    await tester.pumpAndSettle();
+    await pumpDashboard(tester);
 
-    expect(find.text('Enabled'), findsOneWidget);
-    expect(find.text('Active'), findsNWidgets(2));
+    expect(find.text('Active'), findsOneWidget);
     expect(find.text('Inactive'), findsNothing);
     expect(find.text('Enable Accessibility'), findsNothing);
   });
@@ -134,7 +265,13 @@ void main() {
     final service = EventEmittingService(controller, counter);
 
     await tester.pumpWidget(
-      MaterialApp(theme: AppTheme.dark, home: HomeScreen(service: service)),
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: HomeScreen(
+          service: service,
+          storage: InMemoryOnboardingStorage(completed: true),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -159,13 +296,12 @@ void main() {
 
     expect(find.text('128'), findsOneWidget);
     expect(find.text('43'), findsOneWidget);
-    expect(find.text('Active'), findsNWidgets(2));
+    expect(find.text('Active'), findsOneWidget);
     expect(find.text('Inactive'), findsNothing);
   });
 
   testWidgets('reset requires confirmation', (tester) async {
-    await tester.pumpWidget(const ReelCountApp());
-    await tester.pumpAndSettle();
+    await pumpDashboard(tester);
     await tester.ensureVisible(find.text("Reset Today's Statistics"));
     await tester.pumpAndSettle();
 
@@ -176,6 +312,44 @@ void main() {
     expect(find.text('Cancel'), findsOneWidget);
     expect(find.text('Reset'), findsOneWidget);
   });
+}
+
+class InMemoryOnboardingStorage implements OnboardingStorage {
+  InMemoryOnboardingStorage({this.completed = false, this.step = 0});
+
+  bool completed;
+  int step;
+  Set<String> confirmed = <String>{};
+
+  @override
+  Future<bool> isCompleted() async => completed;
+
+  @override
+  Future<int> currentStep() async => step;
+
+  @override
+  Future<Set<String>> confirmedSteps() async => confirmed;
+
+  @override
+  Future<void> saveProgress({
+    required int step,
+    required Set<String> confirmedSteps,
+  }) async {
+    this.step = step;
+    confirmed = confirmedSteps;
+  }
+
+  @override
+  Future<void> setCompleted({required bool completed}) async {
+    this.completed = completed;
+  }
+
+  @override
+  Future<void> clear() async {
+    completed = false;
+    step = 0;
+    confirmed = <String>{};
+  }
 }
 
 class EventEmittingService extends FloatingBubbleService {
@@ -195,11 +369,21 @@ class EventEmittingService extends FloatingBubbleService {
   Future<BubbleCounter> getCounter() async => BubbleCounter.fromMap(initialCounter);
 
   @override
+  Future<int> getDailyTarget() async => 0;
+
+  @override
+  Future<int> setDailyTarget(int target) async => target;
+
+  @override
+  Future<String> checkPauseAppActivity() async => 'disabled';
+
+  @override
   Future<BubbleStatus> getBubbleStatus() async => BubbleStatus.fromMap(<String, Object?>{
         'bubbleVisible': true,
         'expanded': false,
         'overlayPermissionGranted': true,
         'serviceRunning': true,
+        'backgroundActivityStatus': 'allowed',
         'accessibilityEnabled': false,
         'accessibilityServiceRunning': false,
         'detectionState': 'waiting',

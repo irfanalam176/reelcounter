@@ -7,6 +7,7 @@ class AppColors {
   static const border = Color(0xFF26364B);
   static const green = Color(0xFF22C55E);
   static const greenDark = Color(0xFF14532D);
+  static const brain = Color(0xFF43C7C4);
   static const text = Color(0xFFF8FAFC);
   static const muted = Color(0xFF94A3B8);
   static const danger = Color(0xFFF87171);
