@@ -48,6 +48,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         try {
+            instance = this
             isConnected = true
             sessionNonce = UUID.randomUUID().toString().replace("-", "").take(8)
             resetSession(null)
@@ -62,6 +63,10 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val currentEvent = event ?: return
+        if (!VideoCounterManager.isAppTaskActive(applicationContext)) {
+            cancelPendingDetect()
+            return
+        }
         val packageName = currentEvent.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             ?: return
         val platform = platformForPackage(packageName) ?: return
@@ -114,6 +119,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         } catch (error: RuntimeException) {
             reportError("Accessibility service teardown failed", error)
         } finally {
+            instance = null
             super.onDestroy()
         }
     }
@@ -955,8 +961,20 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         )
 
         @Volatile
+        private var instance: ReelDetectionAccessibilityService? = null
+
+        @Volatile
         var isConnected: Boolean = false
             private set
+
+        fun suspendForTaskRemoval(context: Context) {
+            instance?.cancelPendingDetect()
+            VideoCounterManager.setAppTaskActive(context, false)
+        }
+
+        fun resumeForHost(context: Context) {
+            VideoCounterManager.setAppTaskActive(context, true)
+        }
 
         fun isEnabled(context: Context): Boolean {
             val configured = Settings.Secure.getString(

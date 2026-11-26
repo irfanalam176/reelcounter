@@ -1,5 +1,6 @@
 package com.reelcount.app.communication
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
@@ -11,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import com.reelcount.app.notifications.DailyReminderScheduler
 import com.reelcount.app.overlay.FloatingBubbleService
 import com.reelcount.app.storage.BubblePreferences
 import com.reelcount.app.storage.BubbleStorageException
@@ -47,6 +49,12 @@ object FloatingBubbleChannel {
         const val REQUEST_AUTO_BACKGROUND_START = "requestAutoBackgroundStart"
         const val CHECK_PAUSE_APP_ACTIVITY = "checkPauseAppActivity"
         const val REQUEST_PAUSE_APP_ACTIVITY = "requestPauseAppActivity"
+        const val GET_DAILY_HISTORY = "getDailyHistory"
+        const val CHECK_NOTIFICATION_PERMISSION = "checkNotificationPermission"
+        const val REQUEST_NOTIFICATION_PERMISSION = "requestNotificationPermission"
+        const val OPEN_NOTIFICATION_SETTINGS = "openNotificationSettings"
+        const val GET_DAILY_REMINDER = "getDailyReminder"
+        const val SET_DAILY_REMINDER = "setDailyReminder"
     }
 
     object Event {
@@ -75,9 +83,11 @@ object FloatingBubbleChannel {
     private const val PAUSE_APP_ACTIVITY_DISABLED = "disabled"
     private const val PAUSE_APP_ACTIVITY_ENABLED = "enabled"
     private const val PAUSE_APP_ACTIVITY_UNKNOWN = "unknown"
+    private const val REQUEST_NOTIFICATION_PERMISSION_CODE = 2109
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var applicationContext: Context? = null
+    private var hostActivity: Activity? = null
     private var methodChannel: MethodChannel? = null
     private var eventChannel: EventChannel? = null
     private var eventSink: EventChannel.EventSink? = null
@@ -87,6 +97,7 @@ object FloatingBubbleChannel {
 
     fun attach(context: Context, flutterEngine: FlutterEngine) {
         applicationContext = context.applicationContext
+        hostActivity = context as? Activity
         lastPermissionGranted = hasOverlayPermission(applicationContext!!)
         lastAccessibilityEnabled = ReelDetectionAccessibilityService.isEnabled(applicationContext!!)
         lastEventSignature = null
@@ -117,6 +128,7 @@ object FloatingBubbleChannel {
         eventChannel = null
         eventSink = null
         applicationContext = null
+        hostActivity = null
         lastPermissionGranted = null
         lastAccessibilityEnabled = null
         lastEventSignature = null
@@ -136,6 +148,19 @@ object FloatingBubbleChannel {
         lastAccessibilityEnabled = accessibilityEnabled
         if (previousAccessibility != null && previousAccessibility != accessibilityEnabled) {
             notifyTrackingStatusChanged()
+        }
+    }
+
+    fun onRequestPermissionsResult(requestCode: Int, grantResults: IntArray) {
+        if (requestCode != REQUEST_NOTIFICATION_PERMISSION_CODE) {
+            return
+        }
+        val granted = grantResults.isNotEmpty() &&
+            grantResults.first() == PackageManager.PERMISSION_GRANTED
+        applicationContext?.let { context ->
+            if (granted) {
+                DailyReminderScheduler.rescheduleIfEnabled(context)
+            }
         }
     }
 
@@ -293,6 +318,50 @@ object FloatingBubbleChannel {
             Method.REQUEST_PAUSE_APP_ACTIVITY ->
                 result.success(openPauseAppActivitySettings(context))
 
+            Method.GET_DAILY_HISTORY ->
+                safeStorage(result) { BubblePreferences(context).getDailyHistory() }
+
+            Method.CHECK_NOTIFICATION_PERMISSION ->
+                result.success(DailyReminderScheduler.hasPermission(context))
+
+            Method.REQUEST_NOTIFICATION_PERMISSION ->
+                result.success(requestNotificationPermission(context))
+
+            Method.OPEN_NOTIFICATION_SETTINGS ->
+                result.success(DailyReminderScheduler.openNotificationSettings(context))
+
+            Method.GET_DAILY_REMINDER ->
+                safeStorage(result) { dailyReminderMap(context) }
+
+            Method.SET_DAILY_REMINDER -> {
+                val args = arguments as? Map<*, *>
+                val rawEnabled = args?.get("enabled") as? Boolean
+                val rawHour = (args?.get("hour") as? Number)?.toInt()
+                val rawMinute = (args?.get("minute") as? Number)?.toInt()
+                when {
+                    rawEnabled == null || rawHour == null || rawMinute == null ->
+                        result.error(
+                            ERROR_INVALID_ARGUMENTS,
+                            "enabled, hour and minute are required",
+                            null,
+                        )
+
+                    else -> safeStorage(result) {
+                        val preferences = BubblePreferences(context)
+                        preferences.dailyReminderEnabled = rawEnabled
+                        preferences.dailyReminderHour = rawHour
+                        preferences.dailyReminderMinute = rawMinute
+                        DailyReminderScheduler.schedule(
+                            context,
+                            enabled = rawEnabled,
+                            hour = preferences.dailyReminderHour,
+                            minute = preferences.dailyReminderMinute,
+                        )
+                        dailyReminderMap(context)
+                    }
+                }
+            }
+
             else -> result.notImplemented()
         }
     }
@@ -357,6 +426,36 @@ object FloatingBubbleChannel {
 
     private fun hasOverlayPermission(context: Context): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Settings.canDrawOverlays(context)
+
+    private fun requestNotificationPermission(context: Context): Boolean {
+        if (DailyReminderScheduler.hasPermission(context)) {
+            return true
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return false
+        }
+        val preferences = BubblePreferences(context)
+        if (preferences.notificationPermissionRequested) {
+            return false
+        }
+        val activity = hostActivity ?: return false
+        preferences.notificationPermissionRequested = true
+        activity.requestPermissions(
+            arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_NOTIFICATION_PERMISSION_CODE,
+        )
+        return false
+    }
+
+    private fun dailyReminderMap(context: Context): Map<String, Any> {
+        val preferences = BubblePreferences(context)
+        return mapOf(
+            "enabled" to preferences.dailyReminderEnabled,
+            "hour" to preferences.dailyReminderHour,
+            "minute" to preferences.dailyReminderMinute,
+            "permissionGranted" to DailyReminderScheduler.hasPermission(context),
+        )
+    }
 
     private fun requestOverlayPermission(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {

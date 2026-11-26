@@ -24,6 +24,12 @@ class FloatingBubbleMethod {
   static const requestAutoBackgroundStart = 'requestAutoBackgroundStart';
   static const checkPauseAppActivity = 'checkPauseAppActivity';
   static const requestPauseAppActivity = 'requestPauseAppActivity';
+  static const getDailyHistory = 'getDailyHistory';
+  static const checkNotificationPermission = 'checkNotificationPermission';
+  static const requestNotificationPermission = 'requestNotificationPermission';
+  static const openNotificationSettings = 'openNotificationSettings';
+  static const getDailyReminder = 'getDailyReminder';
+  static const setDailyReminder = 'setDailyReminder';
 }
 
 class FloatingBubbleEventName {
@@ -317,6 +323,69 @@ class VideoRecordResult {
       'VideoRecordResult(recorded: $recorded, duplicate: $duplicate)';
 }
 
+class DailyReminderSettings {
+  const DailyReminderSettings({
+    required this.enabled,
+    required this.hour,
+    required this.minute,
+    required this.permissionGranted,
+  });
+
+  final bool enabled;
+  final int hour;
+  final int minute;
+  final bool permissionGranted;
+
+  factory DailyReminderSettings.fromMap(Object? value) {
+    final map = _readMap(value, 'dailyReminder');
+    return DailyReminderSettings(
+      enabled: _readBool(map, 'enabled'),
+      hour: _readInt(map, 'hour'),
+      minute: _readInt(map, 'minute'),
+      permissionGranted: _readBoolOr(map, 'permissionGranted', false),
+    );
+  }
+
+  Map<String, Object?> toMap() => <String, Object?>{
+        'enabled': enabled,
+        'hour': hour,
+        'minute': minute,
+        'permissionGranted': permissionGranted,
+      };
+
+  DailyReminderSettings copyWith({
+    bool? enabled,
+    int? hour,
+    int? minute,
+    bool? permissionGranted,
+  }) =>
+      DailyReminderSettings(
+        enabled: enabled ?? this.enabled,
+        hour: hour ?? this.hour,
+        minute: minute ?? this.minute,
+        permissionGranted: permissionGranted ?? this.permissionGranted,
+      );
+
+  String get timeLabel {
+    final hour12 = hour % 12 == 0 ? 12 : hour % 12;
+    final suffix = hour >= 12 ? 'PM' : 'AM';
+    return '${hour12.toString().padLeft(2, '0')}:'
+        '${minute.toString().padLeft(2, '0')} $suffix';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DailyReminderSettings &&
+          enabled == other.enabled &&
+          hour == other.hour &&
+          minute == other.minute &&
+          permissionGranted == other.permissionGranted;
+
+  @override
+  int get hashCode => Object.hash(enabled, hour, minute, permissionGranted);
+}
+
 class BubbleEvent {
   const BubbleEvent({required this.type, required this.status});
 
@@ -434,6 +503,40 @@ class FloatingBubbleService {
 
   Future<bool> requestPauseAppActivity() =>
       _invoke(FloatingBubbleMethod.requestPauseAppActivity, _readBoolValue);
+
+  Future<List<BubbleCounter>> getDailyHistory() => _invoke(
+        FloatingBubbleMethod.getDailyHistory,
+        (value) => (value as List<Object?>)
+            .map((item) => BubbleCounter.fromMap(item))
+            .toList(growable: false),
+      );
+
+  Future<bool> checkNotificationPermission() =>
+      _invoke(FloatingBubbleMethod.checkNotificationPermission, _readBoolValue);
+
+  Future<bool> requestNotificationPermission() =>
+      _invoke(FloatingBubbleMethod.requestNotificationPermission, _readBoolValue);
+
+  Future<bool> openNotificationSettings() =>
+      _invoke(FloatingBubbleMethod.openNotificationSettings, _readBoolValue);
+
+  Future<DailyReminderSettings> getDailyReminder() =>
+      _invoke(FloatingBubbleMethod.getDailyReminder, DailyReminderSettings.fromMap);
+
+  Future<DailyReminderSettings> setDailyReminder({
+    required bool enabled,
+    required int hour,
+    required int minute,
+  }) =>
+      _invoke(
+        FloatingBubbleMethod.setDailyReminder,
+        DailyReminderSettings.fromMap,
+        <String, Object?>{
+          'enabled': enabled,
+          'hour': hour,
+          'minute': minute,
+        },
+      );
 
   Future<VideoRecordResult> recordWatchedVideo(
     ReelPlatform platform, {

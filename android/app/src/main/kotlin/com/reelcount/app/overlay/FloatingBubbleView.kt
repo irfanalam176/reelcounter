@@ -20,16 +20,16 @@ internal class FloatingBubbleView(context: Context) : View(context) {
     private val size = dp(BUBBLE_SIZE_DP)
     private val backgroundDrawable = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        setColor(Color.rgb(10, 15, 26))
-        setStroke(dp(2), Color.rgb(34, 197, 94))
+        setColor(Color.rgb(0x1B, 0x20, 0x1C))
+        setStroke(dp(2), Color.rgb(0xB6, 0xF3, 0x6B))
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        color = Color.rgb(0xF5, 0xF7, 0xF3)
         textAlign = Paint.Align.CENTER
         isFakeBoldText = true
     }
     private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(34, 197, 94)
+        color = ACCENT
     }
     private val brainDrawable = ContextCompat.getDrawable(context, R.drawable.ic_brain)?.mutate()
     private val brainWidth = dp(BRAIN_SIZE_DP)
@@ -37,7 +37,7 @@ internal class FloatingBubbleView(context: Context) : View(context) {
     private val preferences = BubblePreferences(context)
     private var count = 0
     private var dailyTarget = preferences.dailyTarget
-    private var brainColor = BRAIN_BASE_COLOR
+    private var brainColor = ACCENT
 
     init {
         background = backgroundDrawable
@@ -104,16 +104,17 @@ internal class FloatingBubbleView(context: Context) : View(context) {
 
     private fun updateBrainColor() {
         brainColor = when {
-            dailyTarget <= 0 -> BRAIN_BASE_COLOR
-            count <= dailyTarget / 2 -> BRAIN_BASE_COLOR
-            count <= dailyTarget -> BRAIN_GREEN
-            else -> BRAIN_OVER_LIMIT_COLOR
+            dailyTarget <= 0 -> ACCENT
+            count <= dailyTarget / 2 -> ACCENT
+            count <= dailyTarget -> WARNING
+            else -> DANGER
         }
         brainDrawable?.colorFilter = PorterDuffColorFilter(brainColor, PorterDuff.Mode.SRC_IN)
+        accentPaint.color = brainColor
     }
 
     private fun updateContentDescription() {
-        contentDescription = "ReelCount daily total $count"
+        contentDescription = "Scrollo daily total $count"
     }
 
     private fun dp(value: Int): Int = (value * density).toInt()
@@ -121,14 +122,14 @@ internal class FloatingBubbleView(context: Context) : View(context) {
     private fun dpFloat(value: Int): Float = value * density
 
     private companion object {
-        const val BUBBLE_SIZE_DP = 58
+        const val BUBBLE_SIZE_DP = 60
         const val BRAIN_SIZE_DP = 30
-        const val BRAIN_TOP_DP = 6
-        const val COUNT_CENTER_DP = 45
+        const val BRAIN_TOP_DP = 7
+        const val COUNT_CENTER_DP = 46
         const val VIEWPORT_WIDTH = 516.4220444f
         const val VIEWPORT_HEIGHT = 459.4220444f
-        val BRAIN_BASE_COLOR = Color.rgb(67, 199, 196)
-        val BRAIN_GREEN = Color.rgb(34, 197, 94)
-        val BRAIN_OVER_LIMIT_COLOR = Color.rgb(248, 113, 113)
+        val ACCENT = Color.rgb(0xB6, 0xF3, 0x6B)
+        val WARNING = Color.rgb(0xFF, 0xB4, 0x54)
+        val DANGER = Color.rgb(0xFF, 0x65, 0x65)
     }
 }

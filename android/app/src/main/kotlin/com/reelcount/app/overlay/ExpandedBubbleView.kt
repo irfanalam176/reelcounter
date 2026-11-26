@@ -96,7 +96,7 @@ internal class ExpandedBubbleView(
 
     fun setTrackingState(state: String, message: String) {
         statusText.text = message
-        statusText.setTextColor(if (state == "active") GREEN else MUTED)
+        statusText.setTextColor(if (state == "active") ACCENT else MUTED)
     }
 
     private fun createDragHandle(): View = LinearLayout(context).apply {
@@ -110,7 +110,7 @@ internal class ExpandedBubbleView(
             View(context).apply {
                 background = GradientDrawable().apply {
                     cornerRadius = dpFloat(2)
-                    setColor(GREEN)
+                    setColor(ACCENT)
                 }
                 layoutParams = LayoutParams(dp(34), dp(4)).apply {
                     marginEnd = dp(10)
@@ -119,8 +119,8 @@ internal class ExpandedBubbleView(
         )
         addView(
             TextView(context).apply {
-                text = "ReelCount"
-                setTextColor(Color.WHITE)
+                text = "Scrollo"
+                setTextColor(TEXT)
                 textSize = 14f
                 isAllCaps = false
                 layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
@@ -136,13 +136,13 @@ internal class ExpandedBubbleView(
         }
         val label = TextView(context).apply {
             text = "TOTAL"
-            setTextColor(GREEN)
+            setTextColor(ACCENT)
             textSize = 11f
             layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
         val value = TextView(context).apply {
             text = "0"
-            setTextColor(Color.WHITE)
+            setTextColor(TEXT)
             textSize = 30f
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
             layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
@@ -165,14 +165,14 @@ internal class ExpandedBubbleView(
         row.addView(
             TextView(context).apply {
                 text = platform.label
-                setTextColor(Color.rgb(226, 232, 240))
+                setTextColor(TEXT)
                 textSize = 12f
                 layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
             },
         )
         val count = TextView(context).apply {
             text = "0"
-            setTextColor(Color.WHITE)
+            setTextColor(TEXT)
             textSize = 13f
             gravity = Gravity.END
             layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
@@ -186,10 +186,10 @@ internal class ExpandedBubbleView(
         isAllCaps = false
         textSize = 12f
         minimumHeight = dp(38)
-        setTextColor(Color.rgb(209, 213, 219))
+        setTextColor(TEXT)
         background = GradientDrawable().apply {
-            cornerRadius = dpFloat(10)
-            setColor(Color.rgb(31, 41, 55))
+            cornerRadius = dpFloat(12)
+            setColor(Color.rgb(0x23, 0x29, 0x23))
             setStroke(dp(1), STROKE)
         }
         setOnClickListener {
@@ -207,13 +207,13 @@ internal class ExpandedBubbleView(
 
     private fun panelBackground(): GradientDrawable = GradientDrawable().apply {
         cornerRadius = dpFloat(20)
-        setColor(Color.rgb(10, 15, 26))
-        setStroke(dp(1), Color.rgb(34, 197, 94))
+        setColor(Color.rgb(0x1B, 0x20, 0x1C))
+        setStroke(dp(1), ACCENT)
     }
 
     private fun rowBackground(): GradientDrawable = GradientDrawable().apply {
         cornerRadius = dpFloat(10)
-        setColor(Color.rgb(24, 33, 48))
+        setColor(Color.rgb(0x23, 0x29, 0x23))
         setStroke(dp(1), STROKE)
     }
 
@@ -227,8 +227,9 @@ internal class ExpandedBubbleView(
     }
 
     private companion object {
-        val GREEN = Color.rgb(34, 197, 94)
-        val STROKE = Color.rgb(55, 65, 81)
-        val MUTED = Color.rgb(156, 163, 175)
+        val ACCENT = Color.rgb(0xB6, 0xF3, 0x6B)
+        val TEXT = Color.rgb(0xF5, 0xF7, 0xF3)
+        val STROKE = Color.rgb(0x2C, 0x34, 0x2D)
+        val MUTED = Color.rgb(0x92, 0x9A, 0x91)
     }
 }

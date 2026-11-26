@@ -2,6 +2,8 @@ package com.reelcount.app.storage
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -97,6 +99,26 @@ class BubblePreferences(context: Context) {
         get() = preferences.getInt(KEY_DAILY_TARGET, DEFAULT_DAILY_TARGET).coerceAtLeast(0)
         set(value) = edit { putInt(KEY_DAILY_TARGET, maxOf(0, value)) }
 
+    var isAppTaskActive: Boolean
+        get() = preferences.getBoolean(KEY_APP_TASK_ACTIVE, true)
+        set(value) = edit { putBoolean(KEY_APP_TASK_ACTIVE, value) }
+
+    var notificationPermissionRequested: Boolean
+        get() = preferences.getBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, false)
+        set(value) = edit { putBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, value) }
+
+    var dailyReminderEnabled: Boolean
+        get() = preferences.getBoolean(KEY_DAILY_REMINDER_ENABLED, false)
+        set(value) = edit { putBoolean(KEY_DAILY_REMINDER_ENABLED, value) }
+
+    var dailyReminderHour: Int
+        get() = preferences.getInt(KEY_DAILY_REMINDER_HOUR, DEFAULT_REMINDER_HOUR).coerceIn(0, 23)
+        set(value) = edit { putInt(KEY_DAILY_REMINDER_HOUR, value.coerceIn(0, 23)) }
+
+    var dailyReminderMinute: Int
+        get() = preferences.getInt(KEY_DAILY_REMINDER_MINUTE, DEFAULT_REMINDER_MINUTE).coerceIn(0, 59)
+        set(value) = edit { putInt(KEY_DAILY_REMINDER_MINUTE, value.coerceIn(0, 59)) }
+
     val lastCounterDate: String
         get() {
             ensureToday()
@@ -177,7 +199,20 @@ class BubblePreferences(context: Context) {
         if (cachedDate == today && preferences.getString(KEY_LAST_DATE, null) == today) {
             return
         }
-        if (preferences.getString(KEY_LAST_DATE, null) != today) {
+        val previousDate = preferences.getString(KEY_LAST_DATE, null)
+        if (previousDate != today) {
+            if (!previousDate.isNullOrBlank()) {
+                archiveCounts(
+                    BubbleCounts(
+                        instagram = preferences.getInt(BubblePlatform.INSTAGRAM.key, 0),
+                        youtube = preferences.getInt(BubblePlatform.YOUTUBE.key, 0),
+                        facebook = preferences.getInt(BubblePlatform.FACEBOOK.key, 0),
+                        tiktok = preferences.getInt(BubblePlatform.TIKTOK.key, 0),
+                        snapchat = preferences.getInt(BubblePlatform.SNAPCHAT.key, 0),
+                        date = previousDate,
+                    ),
+                )
+            }
             edit {
                 putInt(BubblePlatform.INSTAGRAM.key, 0)
                 putInt(BubblePlatform.YOUTUBE.key, 0)
@@ -190,6 +225,56 @@ class BubblePreferences(context: Context) {
             }
         }
         cachedDate = today
+    }
+
+    fun getDailyHistory(): List<Map<String, Any>> {
+        ensureToday()
+        val entries = readHistoryEntries()
+        val live = getCounts().toMap().toMutableMap()
+        entries[live["date"] as String] = live
+        return entries.values
+            .sortedBy { it["date"] as String }
+            .takeLast(MAX_HISTORY_ENTRIES)
+            .map { it.toMap() }
+    }
+
+    private fun readHistoryEntries(): MutableMap<String, MutableMap<String, Any>> {
+        val entries = LinkedHashMap<String, MutableMap<String, Any>>()
+        val stored = preferences.getString(KEY_DAILY_HISTORY, null)
+        if (stored.isNullOrBlank()) {
+            return entries
+        }
+        runCatching {
+            val array = JSONArray(stored)
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                val date = item.optString("date").takeIf { it.isNotBlank() } ?: continue
+                entries[date] = mutableMapOf(
+                    "date" to date,
+                    "total" to item.optInt("total", 0),
+                    BubblePlatform.INSTAGRAM.key to item.optInt(BubblePlatform.INSTAGRAM.key, 0),
+                    BubblePlatform.YOUTUBE.key to item.optInt(BubblePlatform.YOUTUBE.key, 0),
+                    BubblePlatform.FACEBOOK.key to item.optInt(BubblePlatform.FACEBOOK.key, 0),
+                    BubblePlatform.TIKTOK.key to item.optInt(BubblePlatform.TIKTOK.key, 0),
+                    BubblePlatform.SNAPCHAT.key to item.optInt(BubblePlatform.SNAPCHAT.key, 0),
+                )
+            }
+        }
+        return entries
+    }
+
+    private fun archiveCounts(counts: BubbleCounts) {
+        if (counts.total <= 0) {
+            return
+        }
+        val entries = readHistoryEntries()
+        entries[counts.date] = counts.toMap().toMutableMap()
+        val trimmed = entries.values
+            .sortedBy { it["date"] as String }
+            .takeLast(MAX_HISTORY_ENTRIES)
+        val array = JSONArray()
+        trimmed.forEach { array.put(JSONObject(it)) }
+        edit { putString(KEY_DAILY_HISTORY, array.toString()) }
     }
 
     private fun edit(block: SharedPreferences.Editor.() -> Unit) {
@@ -212,5 +297,14 @@ class BubblePreferences(context: Context) {
         const val KEY_DAILY_TARGET = "daily_target"
         const val DEFAULT_DAILY_TARGET = 50
         const val KEY_PROCESSED_EVENTS = "processed_event_ids"
+        const val KEY_APP_TASK_ACTIVE = "app_task_active"
+        const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
+        const val KEY_DAILY_REMINDER_ENABLED = "daily_reminder_enabled"
+        const val KEY_DAILY_REMINDER_HOUR = "daily_reminder_hour"
+        const val KEY_DAILY_REMINDER_MINUTE = "daily_reminder_minute"
+        const val KEY_DAILY_HISTORY = "daily_history"
+        const val DEFAULT_REMINDER_HOUR = 20
+        const val DEFAULT_REMINDER_MINUTE = 0
+        const val MAX_HISTORY_ENTRIES = 365
     }
 }

@@ -24,6 +24,7 @@ import com.reelcount.app.communication.FloatingBubbleChannel
 import com.reelcount.app.communication.FloatingBubbleChannel.Event
 import com.reelcount.app.storage.BubblePositionKind
 import com.reelcount.app.storage.BubblePreferences
+import com.reelcount.app.tracking.ReelDetectionAccessibilityService
 import com.reelcount.app.tracking.VideoCounterManager
 
 class FloatingBubbleService : Service() {
@@ -148,6 +149,7 @@ class FloatingBubbleService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        ReelDetectionAccessibilityService.suspendForTaskRemoval(applicationContext)
         deactivateAndStop(Event.BUBBLE_STOPPED)
         super.onTaskRemoved(rootIntent)
     }
@@ -401,8 +403,8 @@ class FloatingBubbleService : Service() {
         }
         return builder
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("ReelCount bubble active")
-            .setContentText("Tap to open ReelCount")
+            .setContentTitle("Scrollo tracking active")
+            .setContentText("Tap to open Scrollo")
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)

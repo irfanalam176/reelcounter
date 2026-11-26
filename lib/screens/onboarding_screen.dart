@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:reelcount/services/floating_bubble_service.dart';
 import 'package:reelcount/services/onboarding_storage.dart';
 import 'package:reelcount/theme/app_theme.dart';
+import 'package:reelcount/widgets/app_ui.dart';
 
 enum SetupStep {
   notifications,
@@ -12,6 +13,7 @@ enum SetupStep {
   background,
   autoStart,
   pauseApp,
+  restrictedSettings,
   accessibility,
   confirmation,
   success,
@@ -31,6 +33,7 @@ extension SetupStepLabel on SetupStep {
         SetupStep.background => 'Background Activity & Battery',
         SetupStep.autoStart => 'Auto Background Start',
         SetupStep.pauseApp => 'Pause App Activity If Unused',
+        SetupStep.restrictedSettings => 'Allow Restricted Settings',
         SetupStep.accessibility => 'Accessibility Service',
         SetupStep.confirmation => 'Confirm Your Setup',
         SetupStep.success => 'Setup Complete',
@@ -38,24 +41,27 @@ extension SetupStepLabel on SetupStep {
 
   String get description => switch (this) {
         SetupStep.notifications =>
-          'ReelCount does not currently ask for notification permission. '
-              'If Android asks for it when you install or update the app, allow it. '
-              'Otherwise, there is nothing to change on this step.',
+          'Allow notifications so Scrollo can send a gentle nudge to open the app '
+              'before your next scrolling session. Notifications never count reels by themselves.',
         SetupStep.overlay =>
           'This lets the counting bubble appear on top of Instagram, YouTube, Facebook, '
               'TikTok, Snapchat, and other apps while you watch reels.',
         SetupStep.background =>
-          'Android can stop apps that run in the background. ReelCount needs background '
+          'Android can stop apps that run in the background. Scrollo needs background '
               'activity and unrestricted battery usage so the bubble and tracking keep '
               'working when you switch between apps.',
         SetupStep.autoStart =>
           'Some Android devices block apps from starting background services by '
-              'themselves. Allowing Auto-start helps ReelCount come back after a restart.',
+              'themselves. Allowing Auto-start helps Scrollo come back after a restart.',
         SetupStep.pauseApp =>
           'Android can pause apps you have not used for a while. Turn this OFF for '
-              'ReelCount so detection is not paused while you are watching reels.',
+              'Scrollo so detection is not paused while you are watching reels.',
+        SetupStep.restrictedSettings =>
+          'Android may block Accessibility services that were not installed from the '
+              'Play Store. Allow restricted settings for Scrollo first, then turn on '
+              'its Accessibility service.',
         SetupStep.accessibility =>
-          'ReelCount uses Accessibility to recognize when you navigate between Reels '
+          'Scrollo uses Accessibility to recognize when you navigate between Reels '
               'and Shorts. This allows it to track your scrolling activity and update '
               'your daily progress.',
         SetupStep.confirmation => '',
@@ -64,23 +70,29 @@ extension SetupStepLabel on SetupStep {
 
   String get settingsPath => switch (this) {
         SetupStep.notifications =>
-          'Settings  >  Apps  >  ReelCount  >  Notifications\n'
-              'Only needed if your Android shows a notification prompt.',
+          'Allow notifications when Android asks, or enable them in\n'
+              'Settings  >  Apps  >  Scrollo  >  Notifications.',
         SetupStep.overlay =>
-          'Settings  >  Apps  >  ReelCount  >  Display over other apps\n'
+          'Settings  >  Apps  >  Scrollo  >  Display over other apps\n'
               'Turn on “Allow display over other apps”.',
         SetupStep.background =>
-          'Settings  >  Apps  >  ReelCount  >  Battery\n'
+          'Settings  >  Apps  >  Scrollo  >  Battery\n'
               'Choose “Unrestricted” and allow background activity.',
         SetupStep.autoStart =>
-          'Settings  >  Apps  >  ReelCount  >  Auto-start\n'
+          'Settings  >  Apps  >  Scrollo  >  Auto-start\n'
               'Some devices call this Auto-launch or Autostart. Turn it ON.',
         SetupStep.pauseApp =>
-          'Settings  >  Apps  >  ReelCount  >  Pause app activity if unused\n'
+          'Settings  >  Apps  >  Scrollo  >  Pause app activity if unused\n'
               'Turn the switch OFF.',
+        SetupStep.restrictedSettings =>
+          'Open Scrollo’s App Info from Settings  >  Apps  >  Scrollo.\n'
+              'Look for Advanced settings, then select “Allow restricted settings”.\n'
+              'Return to Scrollo and continue to Accessibility Settings.\n'
+              'Settings  >  Accessibility  >  Downloaded services\n'
+              'Turn on “Scrollo Detection”.',
         SetupStep.accessibility =>
           'Settings  >  Accessibility  >  Downloaded services\n'
-              'Tap “ReelCount Detection”, then turn on “Use service”.',
+              'Tap “Scrollo Detection”, then turn on “Use service”.',
         SetupStep.confirmation => '',
         SetupStep.success => '',
       };
@@ -91,6 +103,7 @@ extension SetupStepLabel on SetupStep {
         SetupStep.background => Icons.battery_charging_full_outlined,
         SetupStep.autoStart => Icons.flash_on_outlined,
         SetupStep.pauseApp => Icons.pause_circle_outline,
+        SetupStep.restrictedSettings => Icons.tune_rounded,
         SetupStep.accessibility => Icons.accessibility_new_rounded,
         SetupStep.confirmation => Icons.fact_check_outlined,
         SetupStep.success => Icons.check_circle_outline,
@@ -130,6 +143,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     SetupStep.background,
     SetupStep.autoStart,
     SetupStep.pauseApp,
+    SetupStep.restrictedSettings,
     SetupStep.accessibility,
   ];
 
@@ -139,6 +153,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
   Set<String> _confirmedSteps = <String>{};
   BubbleStatus _status = _emptyStatus();
   String _pauseAppActivityStatus = 'unknown';
+  bool _notificationGranted = false;
   bool _loading = true;
   bool _checking = false;
   SetupStep? _busyStep;
@@ -191,12 +206,19 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     try {
       final status = await _service.getBubbleStatus();
       final pause = await _service.checkPauseAppActivity();
+      bool notificationGranted;
+      try {
+        notificationGranted = await _service.checkNotificationPermission();
+      } catch (_) {
+        notificationGranted = _notificationGranted;
+      }
       if (!mounted) {
         return;
       }
       setState(() {
         _status = status;
         _pauseAppActivityStatus = pause;
+        _notificationGranted = notificationGranted;
         _loading = false;
       });
     } catch (error) {
@@ -213,7 +235,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
       case SetupStep.notifications:
         return const SetupCheck(
           SetupState.notRequired,
-          'Not required on this version of ReelCount.',
+          'Not required on this version of Scrollo.',
         );
       case SetupStep.overlay:
         return _status.overlayPermissionGranted
@@ -228,7 +250,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
           step: step,
           verifiedDetail: 'Background activity is allowed.',
           confirmedDetail: 'You confirmed background activity is allowed.',
-          incompleteDetail: 'Background activity is restricted for ReelCount.',
+          incompleteDetail: 'Background activity is restricted for Scrollo.',
           missingDetail:
               'Your device does not share a reliable background activity status.',
         );
@@ -240,7 +262,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
               )
             : const SetupCheck(
                 SetupState.needsConfirmation,
-                'Auto-start cannot be read by ReelCount. Check it in Settings, then confirm.',
+                'Auto-start cannot be read by Scrollo. Check it in Settings, then confirm.',
               );
       case SetupStep.pauseApp:
         return _tristateCheck(
@@ -249,15 +271,25 @@ class _OnboardingFlowState extends State<OnboardingFlow>
           verifiedDetail: 'Pause app activity if unused is off.',
           confirmedDetail:
               'You confirmed Pause app activity if unused is off or not available.',
-          incompleteDetail: 'Pause app activity if unused is ON for ReelCount.',
+          incompleteDetail: 'Pause app activity if unused is ON for Scrollo.',
           missingDetail:
               'Your device does not share a reliable pause-app-activity status.',
         );
+      case SetupStep.restrictedSettings:
+        return _confirmedSteps.contains(SetupStep.restrictedSettings.name)
+            ? const SetupCheck(
+                SetupState.verified,
+                'You confirmed restricted settings are allowed for Scrollo.',
+              )
+            : const SetupCheck(
+                SetupState.needsConfirmation,
+                'Allow restricted settings from Scrollo’s App Info, then confirm.',
+              );
       case SetupStep.accessibility:
         if (_status.accessibilityEnabled && _status.accessibilityServiceRunning) {
           return const SetupCheck(
             SetupState.verified,
-            'ReelCount Detection is enabled and connected.',
+            'Scrollo Detection is enabled and connected.',
           );
         }
         if (_status.accessibilityEnabled) {
@@ -269,7 +301,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         }
         return const SetupCheck(
           SetupState.incomplete,
-          'ReelCount Detection is not enabled yet.',
+          'Scrollo Detection is not enabled yet.',
         );
       case SetupStep.confirmation:
       case SetupStep.success:
@@ -305,6 +337,9 @@ class _OnboardingFlowState extends State<OnboardingFlow>
   bool _canContinue(SetupCheck check) =>
       check.state == SetupState.verified || check.state == SetupState.notRequired;
 
+  bool get _restrictedSettingsConfirmed =>
+      _confirmedSteps.contains(SetupStep.restrictedSettings.name);
+
   List<SetupStep> get _missingSteps => _setupSteps
       .where((step) => !_canContinue(_check(step)))
       .toList(growable: false);
@@ -330,7 +365,35 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     await _goToStep(_stepIndex);
   }
 
+  Future<void> _requestNotificationPermission() async {
+    setState(() => _busyStep = SetupStep.notifications);
+    try {
+      final granted = await _service.requestNotificationPermission();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _notificationGranted = granted);
+      _setMessage(granted
+          ? 'Notifications enabled. Your reminder is ready.'
+          : 'Notifications were not enabled. You can change this in Android Settings.');
+    } catch (error) {
+      if (mounted) {
+        _setMessage(_errorMessage(error));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busyStep = null);
+      }
+    }
+  }
+
   Future<void> _openSettings(SetupStep step) async {
+    if (step == SetupStep.accessibility && !_restrictedSettingsConfirmed) {
+      _setMessage('Allow restricted settings from Scrollo’s App Info first. '
+          'Look for Advanced settings, then select “Allow restricted settings”.');
+      await _goToStep(SetupStep.restrictedSettings.index);
+      return;
+    }
     setState(() => _busyStep = step);
     try {
       switch (step) {
@@ -341,10 +404,12 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         case SetupStep.autoStart:
           await _service.requestAutoBackgroundStart();
         case SetupStep.pauseApp:
+        case SetupStep.restrictedSettings:
           await _service.requestPauseAppActivity();
         case SetupStep.accessibility:
           await _service.requestAccessibilityPermission();
         case SetupStep.notifications:
+          await _service.openNotificationSettings();
         case SetupStep.confirmation:
         case SetupStep.success:
           return;
@@ -352,7 +417,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
       if (!mounted) {
         return;
       }
-      _setMessage('Return to ReelCount after finishing in Android Settings. '
+      _setMessage('Return to Scrollo after finishing in Android Settings. '
           'The status will be checked automatically.');
       await _refresh(showLoading: false);
     } catch (error) {
@@ -423,6 +488,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         SetupStep.background => 'Open Battery Settings',
         SetupStep.autoStart => 'Open Auto-Start Settings',
         SetupStep.pauseApp => 'Open App Info Settings',
+        SetupStep.restrictedSettings => 'Open App Info Settings',
         SetupStep.accessibility => 'Open Accessibility Settings',
         _ => 'Open Settings',
       };
@@ -439,7 +505,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Set up ReelCount'),
+          title: const Text('Set up Scrollo'),
           actions: [
             if (widget.startAtConfirmation)
               IconButton(
@@ -486,6 +552,10 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (step == SetupStep.restrictedSettings) ...[
+          const SectionLabel('Advanced Settings'),
+          const SizedBox(height: 16),
+        ],
         _StepIllustration(icon: step.icon, state: check.state),
         const SizedBox(height: 24),
         Text(
@@ -519,6 +589,24 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         _InstructionCard(path: step.settingsPath),
         const SizedBox(height: 16),
         _StatusBanner(check: check),
+        if (step == SetupStep.notifications) ...[
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _busyStep == step ? null : _requestNotificationPermission,
+            icon: const Icon(Icons.notifications_active_outlined, size: 18),
+            label: Text(_notificationGranted
+                ? 'Notifications Enabled'
+                : 'Allow Notifications'),
+          ),
+          if (!_notificationGranted) ...[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _busyStep == step ? null : () => _openSettings(step),
+              icon: const Icon(Icons.open_in_new_rounded, size: 18),
+              label: const Text('Open Notification Settings'),
+            ),
+          ],
+        ],
         if (hasSettings) ...[
           const SizedBox(height: 16),
           FilledButton.icon(
@@ -540,7 +628,9 @@ class _OnboardingFlowState extends State<OnboardingFlow>
             icon: const Icon(Icons.check_circle_outline, size: 18),
             label: Text(step == SetupStep.autoStart
                 ? 'I Turned It On / Not Available'
-                : 'I Checked This Setting'),
+                : step == SetupStep.restrictedSettings
+                    ? 'I Allowed Restricted Settings'
+                    : 'I Checked This Setting'),
           ),
         ],
         if (step == SetupStep.accessibility && _status.accessibilityEnabled) ...[
@@ -559,7 +649,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         const SizedBox(height: 12),
         const Text(
           'Press the Android back button or swipe from the edge to return here. '
-          'ReelCount checks the status automatically when you come back.',
+          'Scrollo checks the status automatically when you come back.',
           textAlign: TextAlign.center,
           style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.4),
         ),
@@ -656,7 +746,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         ),
         const SizedBox(height: 12),
         const Text(
-          'ReelCount is ready to track your reels and update your daily progress.',
+          'Scrollo is ready to track your reels and update your daily progress.',
           textAlign: TextAlign.center,
           style: TextStyle(color: AppColors.muted, fontSize: 15, height: 1.5),
         ),
@@ -735,7 +825,7 @@ class _StatusBanner extends StatelessWidget {
           'No action needed on this device.'
         ),
       SetupState.needsConfirmation => (
-          Color(0xFFFBBF24),
+          AppColors.warning,
           Icons.help_outline_rounded,
           'Confirmation needed'
         ),
@@ -834,7 +924,7 @@ class _StepIllustration extends StatelessWidget {
     final color = switch (state) {
       SetupState.verified => AppColors.green,
       SetupState.notRequired => AppColors.brain,
-      SetupState.needsConfirmation => const Color(0xFFFBBF24),
+      SetupState.needsConfirmation => AppColors.warning,
       SetupState.incomplete => AppColors.danger,
     };
     return Container(

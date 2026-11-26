@@ -1,14 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import 'package:reelcount/screens/dashboard_screen.dart';
+import 'package:reelcount/screens/history_screen.dart';
+import 'package:reelcount/screens/insights_screen.dart';
 import 'package:reelcount/screens/onboarding_screen.dart';
+import 'package:reelcount/screens/settings_screen.dart';
 import 'package:reelcount/services/floating_bubble_service.dart';
 import 'package:reelcount/services/onboarding_storage.dart';
-import 'package:reelcount/theme/app_theme.dart';
-import 'package:reelcount/widgets/counter_card.dart';
-import 'package:reelcount/widgets/platform_stats_card.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, this.service, this.storage});
@@ -24,15 +24,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final FloatingBubbleService _service;
   late final OnboardingStorage _storage;
   StreamSubscription<BubbleEvent>? _events;
-  final TextEditingController _targetController = TextEditingController();
-  final FocusNode _targetFocus = FocusNode();
 
   BubbleCounter _counter = _emptyCounter();
   BubbleStatus _status = _emptyStatus();
   int _dailyTarget = 0;
+  List<BubbleCounter> _history = const [];
+  DailyReminderSettings _reminder = const DailyReminderSettings(
+    enabled: false,
+    hour: 20,
+    minute: 0,
+    permissionGranted: false,
+  );
+  int _tabIndex = 0;
   bool _loading = true;
   bool _busy = false;
-  bool _setupNeedsAttention = false;
   String _setupIssue = '';
 
   @override
@@ -49,8 +54,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _events?.cancel();
-    _targetController.dispose();
-    _targetFocus.dispose();
     super.dispose();
   }
 
@@ -91,6 +94,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final target = await _service.getDailyTarget();
       final pauseAppActivityStatus = await _service.checkPauseAppActivity();
       final confirmedSteps = await _storage.confirmedSteps();
+      final history = await _safeHistory();
+      final reminder = await _safeReminder();
       if (!mounted) {
         return;
       }
@@ -98,12 +103,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _counter = counter;
         _status = status;
         _dailyTarget = target;
+        _history = history;
+        _reminder = reminder;
         final issues = _setupIssues(status, pauseAppActivityStatus, confirmedSteps);
-        _setupNeedsAttention = issues.isNotEmpty;
         _setupIssue = issues.isEmpty ? '' : issues.first;
-        if (!_targetFocus.hasFocus) {
-          _targetController.text = target > 0 ? target.toString() : '';
-        }
         _loading = false;
       });
     } catch (error) {
@@ -115,19 +118,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _requestPermission() async {
+  Future<List<BubbleCounter>> _safeHistory() async {
     try {
-      await _service.requestOverlayPermission();
-      if (!mounted) {
-        return;
-      }
-      _showMessage('Return to ReelCount after enabling overlay permission.');
-      await _refreshAll(showLoading: false);
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      _showMessage(_errorMessage(error));
+      return await _service.getDailyHistory();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<DailyReminderSettings> _safeReminder() async {
+    try {
+      return await _service.getDailyReminder();
+    } catch (_) {
+      return _reminder;
     }
   }
 
@@ -201,6 +204,106 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _requestPermission() async {
+    try {
+      await _service.requestOverlayPermission();
+      if (!mounted) {
+        return;
+      }
+      _showMessage('Return to Scrollo after enabling overlay permission.');
+      await _refreshAll(showLoading: false);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showMessage(_errorMessage(error));
+    }
+  }
+
+  Future<void> _startTracking() => _runBubbleAction(_service.startFloatingBubble);
+
+  Future<void> _stopTracking() => _runBubbleAction(_service.stopFloatingBubble);
+
+  Future<void> _saveDailyTarget(int target) async {
+    final clamped = target < 0 ? 0 : target;
+    setState(() => _dailyTarget = clamped);
+    try {
+      final saved = await _service.setDailyTarget(clamped);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _dailyTarget = saved);
+      _showMessage('Daily limit saved.');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(_errorMessage(error));
+      }
+    }
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    setState(() => _busy = true);
+    try {
+      final granted = await _service.requestNotificationPermission();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _reminder = _reminder.copyWith(permissionGranted: granted));
+      _showMessage(granted ? 'Notifications enabled.' : 'Notification permission was not granted.');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(_errorMessage(error));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    setState(() => _busy = true);
+    try {
+      await _service.openNotificationSettings();
+    } catch (error) {
+      if (mounted) {
+        _showMessage(_errorMessage(error));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _setReminder({
+    required bool enabled,
+    required int hour,
+    required int minute,
+  }) async {
+    setState(() => _busy = true);
+    try {
+      final reminder = await _service.setDailyReminder(
+        enabled: enabled,
+        hour: hour,
+        minute: minute,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() => _reminder = reminder);
+      _showMessage(enabled ? 'Daily reminder enabled.' : 'Daily reminder disabled.');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(_errorMessage(error));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
   Future<void> _resetStatistics() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -254,361 +357,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _errorMessage(Object error) =>
       error is FloatingBubbleException ? error.message : 'Something went wrong: $error';
 
-  Future<void> _saveDailyTarget(String value) async {
-    final parsed = int.tryParse(value.trim()) ?? 0;
-    final target = parsed < 0 ? 0 : parsed;
-    if (target == _dailyTarget) {
-      return;
-    }
-    setState(() => _dailyTarget = target);
-    try {
-      final saved = await _service.setDailyTarget(target);
-      if (!mounted) {
-        return;
-      }
-      setState(() => _dailyTarget = saved);
-    } catch (error) {
-      if (mounted) {
-        _showMessage(_errorMessage(error));
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final permission = _status.overlayPermissionGranted;
-    final accessibility = _status.accessibilityEnabled;
-    final running = _status.serviceRunning;
-    final visible = _status.bubbleVisible;
-    final expanded = _status.expanded;
-    final missingPermissions = <String>[
-      if (!permission) 'Display over other apps',
-      if (!accessibility) 'Accessibility',
-    ];
-
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              width: 30,
-              height: 30,
-              decoration: BoxDecoration(
-                color: AppColors.green,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.adjust_rounded, color: AppColors.background, size: 20),
-            ),
-            const SizedBox(width: 10),
-            const Text(
-              'ReelCount',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: _busy ? null : () => _refreshAll(showLoading: false),
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
-      ),
       body: SafeArea(
-        child: RefreshIndicator(
-          color: AppColors.green,
-          backgroundColor: AppColors.surface,
-          onRefresh: () => _refreshAll(showLoading: false),
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'DAILY REEL TARGET',
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.3,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      TextField(
-                        controller: _targetController,
-                        focusNode: _targetFocus,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                        decoration: const InputDecoration(
-                          labelText:
-                              'How many Reels do you want to limit yourself to today?',
-                          border: OutlineInputBorder(),
-                          helperText: 'Set 0 for no limit',
-                        ),
-                        onChanged: _saveDailyTarget,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              CounterCard(
-                counter: _counter,
-                loading: _loading,
-                dailyTarget: _dailyTarget,
-              ),
-              PlatformStatsCard(counter: _counter),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'AT A GLANCE',
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.3,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _statusRow(
-                        icon: Icons.radar_outlined,
-                        label: 'Tracking',
-                        value: _status.trackingActive ? 'Active' : 'Inactive',
-                        active: _status.trackingActive,
-                      ),
-                      _statusRow(
-                        icon: Icons.bolt_rounded,
-                        label: 'Floating Bubble',
-                        value: running
-                            ? (visible ? 'Running · Visible' : 'Running · Hidden')
-                            : 'Stopped',
-                        active: running,
-                      ),
-                      _statusRow(
-                        icon: _setupNeedsAttention
-                            ? Icons.warning_amber_rounded
-                            : Icons.verified_rounded,
-                        label: 'Setup',
-                        value: _setupNeedsAttention
-                            ? 'Needs attention'
-                            : 'All configurations ready',
-                        active: !_setupNeedsAttention,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Card(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(18, 18, 18, 0),
-                      child: Text(
-                        'SETTINGS',
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.3,
-                        ),
-                      ),
-                    ),
-                    ListTile(
-                      leading: Icon(
-                        Icons.tune_rounded,
-                        color: _setupNeedsAttention ? AppColors.danger : AppColors.green,
-                      ),
-                      title: const Text(
-                        'Setup & Permissions',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        _setupNeedsAttention
-                            ? 'Fix: $_setupIssue'
-                            : 'Review permissions and device settings',
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: _openSetup,
-                    ),
-                  ],
-                ),
-              ),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'BUBBLE CONTROLS',
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.3,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final width = constraints.maxWidth >= 520
-                              ? (constraints.maxWidth - 12) / 2
-                              : constraints.maxWidth;
-                          return Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              _control(
-                                width: width,
-                                label: 'Start Bubble',
-                                icon: Icons.play_arrow_rounded,
-                                filled: true,
-                                enabled: missingPermissions.isEmpty && !running,
-                                onPressed: () => _runBubbleAction(_service.startFloatingBubble),
-                              ),
-                              _control(
-                                width: width,
-                                label: 'Stop Bubble',
-                                icon: Icons.stop_rounded,
-                                enabled: running,
-                                onPressed: () => _runBubbleAction(_service.stopFloatingBubble),
-                              ),
-                              _control(
-                                width: width,
-                                label: visible ? 'Hide Bubble' : 'Show Bubble',
-                                icon: visible ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                                enabled: running && permission,
-                                onPressed: visible
-                                    ? () => _runBubbleAction(_service.hideFloatingBubble)
-                                    : () => _runBubbleAction(_service.showFloatingBubble),
-                              ),
-                              _control(
-                                width: width,
-                                label: expanded ? 'Collapse Bubble' : 'Expand Bubble',
-                                icon: expanded ? Icons.unfold_less_rounded : Icons.unfold_more_rounded,
-                                enabled: visible && !_busy,
-                                onPressed: expanded
-                                    ? () => _runBubbleAction(_service.collapseFloatingBubble)
-                                    : () => _runBubbleAction(_service.expandFloatingBubble),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                      if (!running && missingPermissions.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          'Start Bubble disabled: missing ${missingPermissions.join(' and ')} '
-                          '${missingPermissions.length == 1 ? 'permission' : 'permissions'}. '
-                          'Grant in Android Settings.',
-                          style: const TextStyle(color: AppColors.danger, fontSize: 12),
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: _busy ? null : _resetStatistics,
-                          icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                          label: const Text('Reset Today\'s Statistics'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.danger,
-                            side: const BorderSide(color: AppColors.danger),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  'ReelCount counts reels automatically. Setup and permission controls '
-                  'live in Settings.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.muted, fontSize: 11),
-                ),
-              ),
-                ],
-              ),
-            ),
-          ),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOut,
+          child: _buildTab(),
         ),
       ),
-    );
-  }
-
-  Widget _statusRow({
-    required IconData icon,
-    required String label,
-    required String value,
-    required bool active,
-  }) {
-    final color = active ? AppColors.green : AppColors.muted;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 19),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-                Text(
-                  value,
-                  style: TextStyle(color: active ? AppColors.text : AppColors.danger, fontSize: 14),
-                ),
-              ],
-            ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (index) => setState(() => _tabIndex = index),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home_rounded),
+            label: 'Home',
           ),
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: active ? AppColors.green : AppColors.border,
-              shape: BoxShape.circle,
-            ),
+          NavigationDestination(
+            icon: Icon(Icons.insights_outlined),
+            selectedIcon: Icon(Icons.insights_rounded),
+            label: 'Insights',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history_outlined),
+            selectedIcon: Icon(Icons.history_rounded),
+            label: 'History',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.tune_outlined),
+            selectedIcon: Icon(Icons.tune_rounded),
+            label: 'Settings',
           ),
         ],
       ),
     );
   }
 
-  Widget _control({
-    required double width,
-    required String label,
-    required IconData icon,
-    required bool enabled,
-    required VoidCallback onPressed,
-    bool filled = false,
-  }) {
-    final button = filled
-        ? FilledButton.icon(
-            onPressed: enabled && !_busy ? onPressed : null,
-            icon: Icon(icon, size: 18),
-            label: Text(label),
-          )
-        : OutlinedButton.icon(
-            onPressed: enabled && !_busy ? onPressed : null,
-            icon: Icon(icon, size: 18),
-            label: Text(label),
-          );
-    return SizedBox(width: width, child: button);
+  Widget _buildTab() {
+    return switch (_tabIndex) {
+      0 => DashboardScreen(
+          key: const ValueKey('dashboard'),
+          counter: _counter,
+          status: _status,
+          dailyTarget: _dailyTarget,
+          history: _history,
+          loading: _loading,
+          busy: _busy,
+          setupIssue: _setupIssue.isEmpty ? null : _setupIssue,
+          onRefresh: () => _refreshAll(showLoading: false),
+          onOpenSetup: _openSetup,
+          onStartTracking: _startTracking,
+          onStopTracking: _stopTracking,
+          onOpenSettings: () => setState(() => _tabIndex = 3),
+        ),
+      1 => InsightsScreen(
+          key: const ValueKey('insights'),
+          history: _history,
+          dailyTarget: _dailyTarget,
+        ),
+      2 => HistoryScreen(
+          key: const ValueKey('history'),
+          history: _history,
+          dailyTarget: _dailyTarget,
+          today: _counter.date,
+        ),
+      _ => SettingsScreen(
+          key: const ValueKey('settings'),
+          status: _status,
+          dailyTarget: _dailyTarget,
+          reminder: _reminder,
+          busy: _busy,
+          onSaveDailyTarget: _saveDailyTarget,
+          onOpenSetup: _openSetup,
+          onRequestNotificationPermission: _requestNotificationPermission,
+          onOpenNotificationSettings: _openNotificationSettings,
+          onSetReminder: _setReminder,
+          onStartTracking: _startTracking,
+          onStopTracking: _stopTracking,
+          onResetStatistics: _resetStatistics,
+        ),
+    };
   }
 }
 
@@ -619,7 +450,7 @@ BubbleCounter _emptyCounter() => const BubbleCounter(
       facebook: 0,
       tiktok: 0,
       snapchat: 0,
-      date: '—',
+      date: '',
     );
 
 BubbleStatus _emptyStatus() => const BubbleStatus(
@@ -627,10 +458,6 @@ BubbleStatus _emptyStatus() => const BubbleStatus(
       expanded: false,
       overlayPermissionGranted: false,
       serviceRunning: false,
-      accessibilityEnabled: false,
-      accessibilityServiceRunning: false,
-      detectionState: 'checking',
-      detectionMessage: 'Checking detection status…',
       counter: BubbleCounter(
         total: 0,
         instagram: 0,
@@ -638,6 +465,6 @@ BubbleStatus _emptyStatus() => const BubbleStatus(
         facebook: 0,
         tiktok: 0,
         snapchat: 0,
-        date: '—',
+        date: '',
       ),
     );

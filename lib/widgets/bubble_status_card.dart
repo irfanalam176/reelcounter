@@ -57,7 +57,7 @@ class BubbleStatusCard extends StatelessWidget {
       _ => 'Unknown',
     };
     final pauseAppActivitySubtitle = switch (pauseAppActivityStatus) {
-      'disabled' => 'Pause app activity if unused is off for ReelCount.',
+      'disabled' => 'Pause app activity if unused is off for Scrollo.',
       'enabled' =>
         'Turn OFF Pause app activity if unused in Android App info.',
       _ => 'Check Pause app activity if unused in Android App info.',
@@ -111,7 +111,7 @@ class BubbleStatusCard extends StatelessWidget {
               icon: Icons.flash_on_outlined,
               label: 'Auto Background Start',
               value: 'Manual',
-              subtitle: 'Enable Auto-start for ReelCount in your device settings.',
+              subtitle: 'Enable Auto-start for Scrollo in your device settings.',
               active: false,
             ),
             _StatusRow(

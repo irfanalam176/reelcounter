@@ -54,8 +54,8 @@ class PermissionCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     granted
-                        ? 'ReelCount can display the bubble above Instagram, YouTube and other apps.'
-                        : 'ReelCount needs “Display over other apps” so the counting bubble stays visible while you watch reels.',
+                        ? 'Scrollo can display the bubble above Instagram, YouTube and other apps.'
+                        : 'Scrollo needs “Display over other apps” so the counting bubble stays visible while you watch reels.',
                     style: const TextStyle(
                       color: AppColors.muted,
                       fontSize: 13,

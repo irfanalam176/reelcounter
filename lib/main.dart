@@ -54,7 +54,7 @@ class _ReelCountAppState extends State<ReelCountApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ReelCount',
+      title: 'Scrollo: Reel Counter & Planner',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
       home: _buildHome(),
@@ -73,7 +73,7 @@ class _ReelCountAppState extends State<ReelCountApp> {
                 const Icon(Icons.error_outline_rounded, color: AppColors.danger, size: 48),
                 const SizedBox(height: 16),
                 const Text(
-                  'Could not load app settings',
+                  'Could not load Scrollo settings',
                   style: TextStyle(color: AppColors.text, fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
@@ -95,7 +95,7 @@ class _ReelCountAppState extends State<ReelCountApp> {
     }
     return switch (_onboardingComplete) {
       null => const Scaffold(
-          body: Center(child: CircularProgressIndicator(color: AppColors.green)),
+          body: Center(child: CircularProgressIndicator(color: AppColors.accent)),
         ),
       false => OnboardingFlow(
           service: widget.service,

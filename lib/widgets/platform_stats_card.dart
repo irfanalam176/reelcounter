@@ -17,15 +17,15 @@ class PlatformStatsCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'PLATFORM STATISTICS',
+              'BY PLATFORM',
               style: TextStyle(
                 color: AppColors.muted,
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1.3,
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             ...ReelPlatform.values.map(
               (platform) => _PlatformRow(
                 platform: platform,
@@ -53,32 +53,24 @@ class _PlatformRow extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: 38,
-            height: 38,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
-              color: config.color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(12),
+              color: AppColors.surfaceLight,
+              borderRadius: BorderRadius.circular(11),
             ),
-            child: Icon(config.icon, color: config.color, size: 20),
+            child: Icon(config.icon, color: AppColors.accent, size: 18),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               config.label,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(color: AppColors.text, fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ),
           Text(
             count.toString(),
-            style: const TextStyle(
-              color: AppColors.text,
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-            ),
+            style: const TextStyle(color: AppColors.text, fontSize: 17, fontWeight: FontWeight.w800),
           ),
         ],
       ),
@@ -86,23 +78,17 @@ class _PlatformRow extends StatelessWidget {
   }
 
   _PlatformConfig _platformConfig(ReelPlatform platform) => switch (platform) {
-        ReelPlatform.instagram => const _PlatformConfig(
-            'Instagram', Icons.photo_camera_outlined, Color(0xFFE1306C)),
-        ReelPlatform.youtube => const _PlatformConfig(
-            'YouTube Shorts', Icons.smart_display_outlined, Color(0xFFFF4D4F)),
-        ReelPlatform.facebook => const _PlatformConfig(
-            'Facebook Reels', Icons.facebook_outlined, Color(0xFF60A5FA)),
-        ReelPlatform.tiktok => const _PlatformConfig(
-            'TikTok', Icons.music_note_rounded, Color(0xFF67E8F9)),
-        ReelPlatform.snapchat => const _PlatformConfig(
-            'Snapchat Spotlight', Icons.snapchat_outlined, Color(0xFFFDE047)),
+        ReelPlatform.instagram => const _PlatformConfig('Instagram', Icons.photo_camera_outlined),
+        ReelPlatform.youtube => const _PlatformConfig('YouTube Shorts', Icons.smart_display_outlined),
+        ReelPlatform.facebook => const _PlatformConfig('Facebook Reels', Icons.facebook_outlined),
+        ReelPlatform.tiktok => const _PlatformConfig('TikTok', Icons.music_note_outlined),
+        ReelPlatform.snapchat => const _PlatformConfig('Snapchat Spotlight', Icons.bolt_outlined),
       };
 }
 
 class _PlatformConfig {
-  const _PlatformConfig(this.label, this.icon, this.color);
+  const _PlatformConfig(this.label, this.icon);
 
   final String label;
   final IconData icon;
-  final Color color;
 }

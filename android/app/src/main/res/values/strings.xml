@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_service_label">ReelCount detection</string>
-    <string name="accessibility_service_description">Counts newly displayed reels and short videos in supported apps so ReelCount can keep your daily statistics up to date.</string>
+    <string name="app_name">Scrollo: Reel Counter &amp; Planner</string>
+    <string name="accessibility_service_label">Scrollo Detection</string>
+    <string name="accessibility_service_description">Counts newly displayed reels and short videos in supported apps so Scrollo can keep your daily statistics up to date.</string>
 </resources>

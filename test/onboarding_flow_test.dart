@@ -28,8 +28,10 @@ void main() {
     await tapText(tester, 'I Turned It On / Not Available');
     await tapText(tester, 'Continue');
     await tapText(tester, 'Continue');
+    expect(find.text('ADVANCED SETTINGS'), findsOneWidget);
+    await tapText(tester, 'I Allowed Restricted Settings');
     await tapText(tester, 'Continue');
-    expect(find.textContaining('ReelCount uses Accessibility'), findsOneWidget);
+    expect(find.textContaining('Scrollo uses Accessibility'), findsOneWidget);
   }
 
   testWidgets('onboarding starts with notifications and keeps accessibility last', (
@@ -42,7 +44,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('STEP 1 OF 6'), findsOneWidget);
+    expect(find.text('STEP 1 OF 7'), findsOneWidget);
     expect(find.text('Notifications'), findsOneWidget);
     expect(find.text('Accessibility Service'), findsNothing);
     expect(find.text('Open Accessibility Settings'), findsNothing);
@@ -57,6 +59,38 @@ void main() {
       greaterThan(service.calls.indexOf(FloatingBubbleMethod.requestOverlayPermission)),
     );
     expect(find.text('Have you completed all these configurations?'), findsNothing);
+  });
+
+  testWidgets('accessibility settings stay closed until restricted settings are confirmed', (
+    tester,
+  ) async {
+    final service = FakeOnboardingService();
+    final storage = InMemoryOnboardingStorage(step: SetupStep.confirmation.index);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: OnboardingFlow(
+          service: service,
+          storage: storage,
+          startAtConfirmation: true,
+          onFinished: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tapText(tester, 'Accessibility Service');
+    await tapText(tester, 'Open Accessibility Settings');
+
+    expect(
+      service.calls,
+      isNot(contains(FloatingBubbleMethod.requestAccessibilityPermission)),
+    );
+    expect(find.text('Allow Restricted Settings'), findsOneWidget);
+    expect(find.textContaining('Tap the three-dot menu'), findsOneWidget);
+
+    await tapText(tester, 'Open App Info Settings');
+    expect(service.calls, contains(FloatingBubbleMethod.requestPauseAppActivity));
   });
 
   testWidgets('final confirmation identifies incomplete settings and sends user back', (
@@ -112,7 +146,7 @@ void main() {
     await tapText(tester, 'Next');
 
     expect(storage.completed, isTrue);
-    expect(find.text('Setup & Permissions'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
     expect(find.text('Enable Accessibility'), findsNothing);
   });
 }
@@ -191,7 +225,21 @@ class FakeOnboardingService extends FloatingBubbleService {
   Future<int> setDailyTarget(int target) async => target;
 
   @override
+  Future<List<BubbleCounter>> getDailyHistory() async => const [];
+
+  @override
+  Future<DailyReminderSettings> getDailyReminder() async => const DailyReminderSettings(
+        enabled: false,
+        hour: 20,
+        minute: 0,
+        permissionGranted: true,
+      );
+
+  @override
   Future<String> checkPauseAppActivity() async => pauseAppActivityStatus;
+
+  @override
+  Future<bool> checkNotificationPermission() async => true;
 
   @override
   Future<BubbleStatus> getBubbleStatus() async => BubbleStatus(
@@ -236,6 +284,18 @@ class FakeOnboardingService extends FloatingBubbleService {
   Future<bool> requestAccessibilityPermission() async {
     calls.add(FloatingBubbleMethod.requestAccessibilityPermission);
     accessibilityEnabled = true;
+    return true;
+  }
+
+  @override
+  Future<bool> requestNotificationPermission() async {
+    calls.add(FloatingBubbleMethod.requestNotificationPermission);
+    return true;
+  }
+
+  @override
+  Future<bool> openNotificationSettings() async {
+    calls.add(FloatingBubbleMethod.openNotificationSettings);
     return true;
   }
 }

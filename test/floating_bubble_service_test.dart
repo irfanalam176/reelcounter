@@ -79,6 +79,20 @@ void main() {
           return call.arguments;
         case FloatingBubbleMethod.getBubbleStatus:
           return statusMap;
+        case FloatingBubbleMethod.getDailyHistory:
+          return <Object?>[counterMap];
+        case FloatingBubbleMethod.checkNotificationPermission:
+        case FloatingBubbleMethod.requestNotificationPermission:
+        case FloatingBubbleMethod.openNotificationSettings:
+          return true;
+        case FloatingBubbleMethod.getDailyReminder:
+        case FloatingBubbleMethod.setDailyReminder:
+          return <String, Object?>{
+            'enabled': true,
+            'hour': 20,
+            'minute': 30,
+            'permissionGranted': true,
+          };
         case FloatingBubbleMethod.recordWatchedVideo:
           return recordResultMap;
         default:
@@ -205,6 +219,42 @@ void main() {
           FloatingBubbleMethod.checkPauseAppActivity,
           FloatingBubbleMethod.requestPauseAppActivity,
         ],
+      );
+    });
+
+    test('history and reminder methods', () async {
+      final history = await service.getDailyHistory();
+      expect(history, hasLength(1));
+      expect(history.single, BubbleCounter.fromMap(counterMap));
+
+      expect(await service.checkNotificationPermission(), isTrue);
+      expect(await service.requestNotificationPermission(), isTrue);
+      expect(await service.openNotificationSettings(), isTrue);
+
+      final reminder = await service.setDailyReminder(
+        enabled: true,
+        hour: 20,
+        minute: 30,
+      );
+      expect(reminder.enabled, isTrue);
+      expect(reminder.hour, 20);
+      expect(reminder.minute, 30);
+      expect(reminder.timeLabel, '08:30 PM');
+      expect(reminder.permissionGranted, isTrue);
+      expect(reminder.copyWith(enabled: false).enabled, isFalse);
+      expect(
+        calls.map((call) => call.method),
+        <String>[
+          FloatingBubbleMethod.getDailyHistory,
+          FloatingBubbleMethod.checkNotificationPermission,
+          FloatingBubbleMethod.requestNotificationPermission,
+          FloatingBubbleMethod.openNotificationSettings,
+          FloatingBubbleMethod.setDailyReminder,
+        ],
+      );
+      expect(
+        calls.last.arguments,
+        <String, Object?>{'enabled': true, 'hour': 20, 'minute': 30},
       );
     });
 

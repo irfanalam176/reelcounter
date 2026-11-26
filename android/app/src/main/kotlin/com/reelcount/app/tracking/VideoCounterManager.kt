@@ -29,22 +29,36 @@ object VideoCounterManager {
     @Volatile
     private var detectionError: String? = null
 
+    @Volatile
+    private var appTaskActive: Boolean = false
+
     val isTrackingEngineConnected: Boolean
         get() = serviceConnected
 
     val trackingState: String
         get() = when {
+            !appTaskActive -> "stopped"
             detectionError != null -> "error"
             serviceConnected -> "active"
             else -> "waiting"
         }
 
     val trackingMessage: String
-        get() = detectionError ?: if (serviceConnected) {
-            "Tracking active"
-        } else {
-            "Tracking engine not connected"
+        get() = when {
+            !appTaskActive -> "Tracking stopped because Scrollo was closed"
+            detectionError != null -> detectionError ?: "Detection error"
+            serviceConnected -> "Tracking active"
+            else -> "Tracking engine not connected"
         }
+
+    fun setAppTaskActive(context: Context, active: Boolean) {
+        val previousState = trackingState
+        val previousMessage = trackingMessage
+        appTaskActive = active
+        notifyIfChanged(previousState, previousMessage)
+    }
+
+    fun isAppTaskActive(context: Context): Boolean = appTaskActive
 
     fun setTrackingEngineConnected(connected: Boolean) = setDetectionConnected(connected)
 

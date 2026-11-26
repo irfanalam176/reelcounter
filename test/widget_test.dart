@@ -18,6 +18,7 @@ void main() {
 
   late Map<String, Object?> counter;
   late Map<String, Object?> status;
+  late List<Object?> history;
   final methodCalls = <String>[];
 
   Map<String, Object?> buildCounter({required int total, required int instagram}) =>
@@ -92,6 +93,18 @@ void main() {
       accessibilityEnabled: false,
       detectionState: 'waiting',
     );
+    history = <Object?>[
+      buildCounter(total: 110, instagram: 38),
+      <String, Object?>{
+        'total': 96,
+        'instagram': 30,
+        'youtube': 28,
+        'facebook': 18,
+        'tiktok': 12,
+        'snapchat': 8,
+        'date': '2026-11-18',
+      },
+    ];
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(methodChannel, (call) async {
@@ -107,6 +120,17 @@ void main() {
           return status;
         case FloatingBubbleMethod.checkPauseAppActivity:
           return 'enabled';
+        case FloatingBubbleMethod.getDailyHistory:
+          return history;
+        case FloatingBubbleMethod.getDailyReminder:
+          return <String, Object?>{
+            'enabled': false,
+            'hour': 20,
+            'minute': 0,
+            'permissionGranted': true,
+          };
+        case FloatingBubbleMethod.checkNotificationPermission:
+          return true;
         default:
           return true;
       }
@@ -131,20 +155,38 @@ void main() {
   testWidgets('dashboard reports independent statuses', (tester) async {
     await pumpDashboard(tester);
 
-    expect(find.text('ReelCount'), findsWidgets);
+    expect(find.text('Scrollo'), findsWidgets);
     expect(find.text('127'), findsOneWidget);
     expect(find.text('42'), findsOneWidget);
     expect(find.text('Running · Visible'), findsOneWidget);
     expect(find.text('Inactive'), findsOneWidget);
     expect(find.text('Setup & Permissions'), findsOneWidget);
     expect(find.text('Needs attention'), findsOneWidget);
-    expect(find.text('50'), findsOneWidget);
+    expect(find.textContaining('Daily limit 50'), findsOneWidget);
     expect(find.text('Enable Accessibility'), findsNothing);
     expect(find.text('Overlay permission ready'), findsNothing);
     expect(find.byIcon(Icons.add), findsNothing);
     expect(find.byIcon(Icons.remove), findsNothing);
     expect(find.text('+1'), findsNothing);
     expect(find.text('-1'), findsNothing);
+  });
+
+  testWidgets('bottom navigation opens insights, history, and settings', (tester) async {
+    await pumpDashboard(tester);
+
+    await tapText(tester, 'Insights');
+    expect(find.text('Insights'), findsWidgets);
+    expect(find.text('LAST 7 DAYS'), findsOneWidget);
+    expect(find.text('PLATFORM MIX'), findsOneWidget);
+
+    await tapText(tester, 'History');
+    expect(find.text('DAILY LOG'), findsOneWidget);
+    expect(find.text('96'), findsOneWidget);
+
+    await tapText(tester, 'Settings');
+    expect(find.text('Daily reminder'), findsWidgets);
+    expect(find.text('Notification access'), findsOneWidget);
+    expect(find.text('Reset all statistics'), findsOneWidget);
   });
 
   testWidgets('background setup status and settings action', (tester) async {
@@ -161,7 +203,7 @@ void main() {
     await tapText(tester, 'Background Activity & Battery');
 
     expect(
-      find.text('Background activity is restricted for ReelCount.'),
+      find.text('Background activity is restricted for Scrollo.'),
       findsOneWidget,
     );
     await tapText(tester, 'Open Battery Settings');
@@ -202,10 +244,14 @@ void main() {
   testWidgets('daily target drives progress', (tester) async {
     await pumpDashboard(tester);
 
+    await tapText(tester, 'Settings');
     await tester.enterText(find.byType(TextField), '30');
     await tester.pumpAndSettle();
+    await tapText(tester, 'Save daily limit');
 
-    expect(find.text('Daily limit 30'), findsOneWidget);
+    expect(methodCalls, contains(FloatingBubbleMethod.setDailyTarget));
+    await tapText(tester, 'Home');
+    expect(find.textContaining('Daily limit 30'), findsOneWidget);
     expect(find.textContaining('% used'), findsOneWidget);
   });
 
@@ -220,14 +266,14 @@ void main() {
 
     FilledButton startButton() => tester.widget<FilledButton>(
           find.ancestor(
-            of: find.text('Start Bubble'),
+            of: find.text('Start tracking'),
             matching: find.byType(FilledButton),
           ),
         );
 
     expect(startButton().onPressed, isNull);
     expect(
-      find.textContaining('Start Bubble disabled: missing Accessibility permission'),
+      find.textContaining('Grant overlay and accessibility access in Setup'),
       findsOneWidget,
     );
 
@@ -241,7 +287,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(startButton().onPressed, isNotNull);
-    expect(find.textContaining('Start Bubble disabled'), findsNothing);
+    expect(find.textContaining('Grant overlay and accessibility access in Setup'), findsNothing);
   });
 
   testWidgets('tracking is active only with detection and bubble', (tester) async {
@@ -302,11 +348,8 @@ void main() {
 
   testWidgets('reset requires confirmation', (tester) async {
     await pumpDashboard(tester);
-    await tester.ensureVisible(find.text("Reset Today's Statistics"));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text("Reset Today's Statistics"));
-    await tester.pumpAndSettle();
+    await tapText(tester, 'Settings');
+    await tapText(tester, 'Reset all statistics');
 
     expect(find.text("Reset today's statistics?"), findsOneWidget);
     expect(find.text('Cancel'), findsOneWidget);
@@ -376,6 +419,20 @@ class EventEmittingService extends FloatingBubbleService {
 
   @override
   Future<String> checkPauseAppActivity() async => 'disabled';
+
+  @override
+  Future<List<BubbleCounter>> getDailyHistory() async => const [];
+
+  @override
+  Future<DailyReminderSettings> getDailyReminder() async => const DailyReminderSettings(
+        enabled: false,
+        hour: 20,
+        minute: 0,
+        permissionGranted: true,
+      );
+
+  @override
+  Future<bool> checkNotificationPermission() async => true;
 
   @override
   Future<BubbleStatus> getBubbleStatus() async => BubbleStatus.fromMap(<String, Object?>{
