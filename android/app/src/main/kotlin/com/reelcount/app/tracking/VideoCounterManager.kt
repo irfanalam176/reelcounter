@@ -3,6 +3,7 @@ package com.reelcount.app.tracking
 import android.content.Context
 import android.util.Log
 import com.reelcount.app.communication.FloatingBubbleChannel
+import com.reelcount.app.notifications.DailyLimitNotifier
 import com.reelcount.app.overlay.FloatingBubbleService
 import com.reelcount.app.storage.BubbleCounts
 import com.reelcount.app.storage.BubblePlatform
@@ -109,6 +110,16 @@ object VideoCounterManager {
         val updated = preferences.incrementPlatform(platform)
         if (normalizedEventId != null) {
             preferences.markProcessedEvent(normalizedEventId)
+        }
+        runCatching {
+            DailyLimitNotifier.notifyReached(
+                context,
+                preferences,
+                updated.total,
+                preferences.dailyTarget,
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "daily limit milestone notification failed: ${error.message}")
         }
 
         FloatingBubbleService.refreshCounter(context)

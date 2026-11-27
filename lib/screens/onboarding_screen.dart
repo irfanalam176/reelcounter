@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import 'package:reelcount/services/floating_bubble_service.dart';
@@ -39,60 +37,23 @@ extension SetupStepLabel on SetupStep {
         SetupStep.success => 'Setup Complete',
       };
 
-  String get description => switch (this) {
-        SetupStep.notifications =>
-          'Allow notifications so Scrollo can send a gentle nudge to open the app '
-              'before your next scrolling session. Notifications never count reels by themselves.',
-        SetupStep.overlay =>
-          'This lets the counting bubble appear on top of Instagram, YouTube, Facebook, '
-              'TikTok, Snapchat, and other apps while you watch reels.',
-        SetupStep.background =>
-          'Android can stop apps that run in the background. Scrollo needs background '
-              'activity and unrestricted battery usage so the bubble and tracking keep '
-              'working when you switch between apps.',
-        SetupStep.autoStart =>
-          'Some Android devices block apps from starting background services by '
-              'themselves. Allowing Auto-start helps Scrollo come back after a restart.',
-        SetupStep.pauseApp =>
-          'Android can pause apps you have not used for a while. Turn this OFF for '
-              'Scrollo so detection is not paused while you are watching reels.',
-        SetupStep.restrictedSettings =>
-          'Android may block Accessibility services that were not installed from the '
-              'Play Store. Allow restricted settings for Scrollo first, then turn on '
-              'its Accessibility service.',
-        SetupStep.accessibility =>
-          'Scrollo uses Accessibility to recognize when you navigate between Reels '
-              'and Shorts. This allows it to track your scrolling activity and update '
-              'your daily progress.',
-        SetupStep.confirmation => '',
-        SetupStep.success => '',
-      };
-
   String get settingsPath => switch (this) {
         SetupStep.notifications =>
-          'Allow notifications when Android asks, or enable them in\n'
-              'Settings  >  Apps  >  Scrollo  >  Notifications.',
+          'Settings → Apps → Scrollo → Notifications',
         SetupStep.overlay =>
-          'Settings  >  Apps  >  Scrollo  >  Display over other apps\n'
-              'Turn on “Allow display over other apps”.',
+          'Settings → Apps → Scrollo → Display over other apps → Allow',
         SetupStep.background =>
-          'Settings  >  Apps  >  Scrollo  >  Battery\n'
-              'Choose “Unrestricted” and allow background activity.',
+          'Settings → Apps → Scrollo → Battery → Allow background activity (menu names may vary)',
         SetupStep.autoStart =>
-          'Settings  >  Apps  >  Scrollo  >  Auto-start\n'
-              'Some devices call this Auto-launch or Autostart. Turn it ON.',
+          'Settings → Apps → Scrollo → Auto-start → Allow\n'
+              'Some devices call this Auto-launch or Autostart.',
         SetupStep.pauseApp =>
-          'Settings  >  Apps  >  Scrollo  >  Pause app activity if unused\n'
-              'Turn the switch OFF.',
+          'Settings → Apps → Scrollo → Pause app activity if unused → Disable',
         SetupStep.restrictedSettings =>
-          'Open Scrollo’s App Info from Settings  >  Apps  >  Scrollo.\n'
-              'Look for Advanced settings, then select “Allow restricted settings”.\n'
-              'Return to Scrollo and continue to Accessibility Settings.\n'
-              'Settings  >  Accessibility  >  Downloaded services\n'
-              'Turn on “Scrollo Detection”.',
+          'Settings → Apps → Scrollo → Three-dot menu → Allow restricted settings\n'
+              'On some devices this is under Advanced settings.',
         SetupStep.accessibility =>
-          'Settings  >  Accessibility  >  Downloaded services\n'
-              'Tap “Scrollo Detection”, then turn on “Use service”.',
+          'Settings → Accessibility → Downloaded Apps → Scrollo → Enable',
         SetupStep.confirmation => '',
         SetupStep.success => '',
       };
@@ -149,6 +110,10 @@ class _OnboardingFlowState extends State<OnboardingFlow>
 
   late final FloatingBubbleService _service;
   late final OnboardingStorage _storage;
+  final ScrollController _scrollController = ScrollController();
+  late final Map<SetupStep, GlobalKey> _permissionKeys = {
+    for (final step in _setupSteps) step: GlobalKey(),
+  };
   int _stepIndex = 0;
   Set<String> _confirmedSteps = <String>{};
   BubbleStatus _status = _emptyStatus();
@@ -170,6 +135,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -191,12 +157,13 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         _confirmedSteps = confirmed;
         _stepIndex = widget.startAtConfirmation
             ? SetupStep.confirmation.index
-            : savedStep.clamp(0, _setupSteps.length);
+            : savedStep.clamp(0, SetupStep.success.index);
       });
     } catch (error) {
       _setMessage('Could not load saved setup progress: $error');
     }
     await _refresh(showLoading: false);
+    _scrollToFirstIssue();
   }
 
   Future<void> _refresh({bool showLoading = false}) async {
@@ -230,13 +197,38 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     }
   }
 
+  void _scrollToFirstIssue() {
+    final missing = _missingSteps;
+    if (missing.isEmpty || _stepIndex == SetupStep.success.index) {
+      return;
+    }
+    final key = _permissionKeys[missing.first];
+    if (key == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        return;
+      }
+      final context = key.currentContext;
+      if (context == null) {
+        return;
+      }
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.1,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
   SetupCheck _check(SetupStep step) {
     switch (step) {
       case SetupStep.notifications:
-        return const SetupCheck(
-          SetupState.notRequired,
-          'Not required on this version of Scrollo.',
-        );
+        return _notificationGranted
+            ? const SetupCheck(SetupState.verified, 'Notifications are enabled.')
+            : const SetupCheck(SetupState.incomplete, 'Notifications are not enabled yet.');
       case SetupStep.overlay:
         return _status.overlayPermissionGranted
             ? const SetupCheck(SetupState.verified, 'Display over other apps is enabled.')
@@ -337,32 +329,29 @@ class _OnboardingFlowState extends State<OnboardingFlow>
   bool _canContinue(SetupCheck check) =>
       check.state == SetupState.verified || check.state == SetupState.notRequired;
 
-  bool get _restrictedSettingsConfirmed =>
-      _confirmedSteps.contains(SetupStep.restrictedSettings.name);
-
   List<SetupStep> get _missingSteps => _setupSteps
       .where((step) => !_canContinue(_check(step)))
       .toList(growable: false);
 
-  Future<void> _goToStep(int index) async {
+  int get _readyCount => _setupSteps.length - _missingSteps.length;
+
+  Future<void> _saveProgress() async {
     try {
       await _storage.saveProgress(
-        step: index,
+        step: _stepIndex,
         confirmedSteps: _confirmedSteps,
       );
     } catch (error) {
       _setMessage(_errorMessage(error));
     }
+  }
+
+  Future<void> _confirmStep(SetupStep step) async {
     if (!mounted) {
       return;
     }
-    setState(() => _stepIndex = index);
-  }
-
-  Future<void> _confirmCurrentStep() async {
-    final step = _setupSteps[_stepIndex];
-    _confirmedSteps.add(step.name);
-    await _goToStep(_stepIndex);
+    setState(() => _confirmedSteps.add(step.name));
+    await _saveProgress();
   }
 
   Future<void> _requestNotificationPermission() async {
@@ -388,12 +377,6 @@ class _OnboardingFlowState extends State<OnboardingFlow>
   }
 
   Future<void> _openSettings(SetupStep step) async {
-    if (step == SetupStep.accessibility && !_restrictedSettingsConfirmed) {
-      _setMessage('Allow restricted settings from Scrollo’s App Info first. '
-          'Look for Advanced settings, then select “Allow restricted settings”.');
-      await _goToStep(SetupStep.restrictedSettings.index);
-      return;
-    }
     setState(() => _busyStep = step);
     try {
       switch (step) {
@@ -418,7 +401,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         return;
       }
       _setMessage('Return to Scrollo after finishing in Android Settings. '
-          'The status will be checked automatically.');
+          'Statuses are checked automatically.');
       await _refresh(showLoading: false);
     } catch (error) {
       if (mounted) {
@@ -431,27 +414,21 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     }
   }
 
-  Future<void> _next() async {
-    if (_stepIndex < _setupSteps.length) {
-      await _goToStep(_stepIndex + 1);
-    }
-  }
-
   Future<void> _confirmAll() async {
     setState(() => _checking = true);
     await _refresh(showLoading: false);
-    final missing = _missingSteps;
     if (!mounted) {
       return;
     }
+    final missing = _missingSteps;
     setState(() => _checking = false);
     if (missing.isEmpty) {
-      await _goToStep(SetupStep.success.index);
+      setState(() => _stepIndex = SetupStep.success.index);
+      await _saveProgress();
       return;
     }
     final labels = missing.map((step) => step.title).join(', ');
-    _setMessage('Still incomplete: $labels. Opening the first step to review.');
-    await _goToStep(_setupSteps.indexOf(missing.first));
+    _setMessage('Still incomplete: $labels. Review the permissions below.');
   }
 
   Future<void> _finish() async {
@@ -484,6 +461,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
       : 'Something went wrong: $error';
 
   String _buttonLabel(SetupStep step) => switch (step) {
+        SetupStep.notifications => 'Grant Notifications',
         SetupStep.overlay => 'Open Display Settings',
         SetupStep.background => 'Open Battery Settings',
         SetupStep.autoStart => 'Open Auto-Start Settings',
@@ -493,21 +471,30 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         _ => 'Open Settings',
       };
 
+  String _confirmLabel(SetupStep step) => switch (step) {
+        SetupStep.autoStart => 'I Turned It On / Not Available',
+        SetupStep.restrictedSettings => 'I Allowed Restricted Settings',
+        SetupStep.pauseApp => 'I Checked This Setting',
+        _ => 'I Checked This Setting',
+      };
+
   @override
   Widget build(BuildContext context) {
-    final canPop = widget.startAtConfirmation || _stepIndex == SetupStep.success.index;
+    final reopened = widget.startAtConfirmation;
+    final showSuccess = _stepIndex == SetupStep.success.index;
+    final ready = _readyCount;
     return PopScope(
-      canPop: canPop,
+      canPop: reopened || showSuccess,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && !canPop) {
-          _setMessage('Finish the setup wizard to continue.');
+        if (!didPop && !reopened && !showSuccess) {
+          _setMessage('Finish the permission setup to continue.');
         }
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Set up Scrollo'),
+          title: Text(reopened ? 'Permissions' : 'Set up Scrollo'),
           actions: [
-            if (widget.startAtConfirmation)
+            if (reopened)
               IconButton(
                 tooltip: 'Close',
                 onPressed: () => Navigator.of(context).maybePop(),
@@ -516,462 +503,325 @@ class _OnboardingFlowState extends State<OnboardingFlow>
           ],
         ),
         body: SafeArea(
-          child: Column(
-            children: [
-              LinearProgressIndicator(
-                value: _stepIndex >= SetupStep.confirmation.index
-                    ? 1
-                    : (_stepIndex + 1) / (_setupSteps.length + 1),
-                minHeight: 4,
-                backgroundColor: AppColors.surface,
-                color: AppColors.green,
-              ),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator(color: AppColors.green))
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
-                        child: _stepIndex == SetupStep.confirmation.index
-                            ? _buildConfirmation()
-                            : _stepIndex == SetupStep.success.index
-                                ? _buildSuccess()
-                                : _buildStep(_setupSteps[_stepIndex]),
+          child: _loading
+              ? const Center(child: CircularProgressIndicator(color: AppColors.green))
+              : Column(
+                  children: [
+                    if (!showSuccess) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Permissions',
+                                    style: TextStyle(
+                                      color: AppColors.text,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Everything Scrollo needs, in one place.',
+                                    style: TextStyle(color: AppColors.muted, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            StatusPill(
+                              label: '$ready of ${_setupSteps.length} ready',
+                              tone: ready == _setupSteps.length
+                                  ? StatusTone.success
+                                  : StatusTone.warning,
+                            ),
+                          ],
+                        ),
                       ),
-              ),
-            ],
-          ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                        child: LinearProgressIndicator(
+                          value: ready / _setupSteps.length,
+                          minHeight: 4,
+                          backgroundColor: AppColors.surface,
+                          color: AppColors.green,
+                        ),
+                      ),
+                    ],
+                    Expanded(
+                      child: showSuccess
+                          ? _buildSuccess()
+                          : SingleChildScrollView(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (final step in _setupSteps)
+                                    _buildPermissionCard(step),
+                                  const SizedBox(height: 8),
+                                  FilledButton(
+                                    onPressed: _checking ? null : _confirmAll,
+                                    child: Text(_checking
+                                        ? 'Checking settings…'
+                                        : reopened
+                                            ? 'Done'
+                                            : 'Finish Setup'),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'Return to Scrollo after finishing in Android Settings. '
+                                    'Statuses refresh automatically.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: AppColors.muted,
+                                      fontSize: 12,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
         ),
       ),
     );
   }
 
-  Widget _buildStep(SetupStep step) {
+  Widget _buildPermissionCard(SetupStep step) {
     final check = _check(step);
     final busy = _busyStep == step;
-    final hasSettings = step != SetupStep.notifications;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (step == SetupStep.restrictedSettings) ...[
-          const SectionLabel('Advanced Settings'),
-          const SizedBox(height: 16),
-        ],
-        _StepIllustration(icon: step.icon, state: check.state),
-        const SizedBox(height: 24),
-        Text(
-          'STEP ${_stepIndex + 1} OF ${_setupSteps.length}',
-          style: const TextStyle(
-            color: AppColors.green,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1.4,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          step.title,
-          style: const TextStyle(
-            color: AppColors.text,
-            fontSize: 26,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          step.description,
-          style: const TextStyle(
-            color: AppColors.muted,
-            fontSize: 15,
-            height: 1.5,
-          ),
-        ),
-        const SizedBox(height: 20),
-        _InstructionCard(path: step.settingsPath),
-        const SizedBox(height: 16),
-        _StatusBanner(check: check),
-        if (step == SetupStep.notifications) ...[
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _busyStep == step ? null : _requestNotificationPermission,
-            icon: const Icon(Icons.notifications_active_outlined, size: 18),
-            label: Text(_notificationGranted
-                ? 'Notifications Enabled'
-                : 'Allow Notifications'),
-          ),
-          if (!_notificationGranted) ...[
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: _busyStep == step ? null : () => _openSettings(step),
-              icon: const Icon(Icons.open_in_new_rounded, size: 18),
-              label: const Text('Open Notification Settings'),
-            ),
-          ],
-        ],
-        if (hasSettings) ...[
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: busy ? null : () => _openSettings(step),
-            icon: busy
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.open_in_new_rounded, size: 18),
-            label: Text(busy ? 'Opening settings…' : _buttonLabel(step)),
-          ),
-        ],
-        if (check.state == SetupState.needsConfirmation) ...[
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: _confirmCurrentStep,
-            icon: const Icon(Icons.check_circle_outline, size: 18),
-            label: Text(step == SetupStep.autoStart
-                ? 'I Turned It On / Not Available'
-                : step == SetupStep.restrictedSettings
-                    ? 'I Allowed Restricted Settings'
-                    : 'I Checked This Setting'),
-          ),
-        ],
-        if (step == SetupStep.accessibility && _status.accessibilityEnabled) ...[
-          const SizedBox(height: 12),
-          TextButton.icon(
-            onPressed: () => _refresh(showLoading: false),
-            icon: const Icon(Icons.refresh_rounded, size: 18),
-            label: const Text('Check Again'),
-          ),
-        ],
-        const SizedBox(height: 24),
-        FilledButton(
-          onPressed: _canContinue(check) ? _next : null,
-          child: Text(step == SetupStep.notifications ? 'Start Setup' : 'Continue'),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Press the Android back button or swipe from the edge to return here. '
-          'Scrollo checks the status automatically when you come back.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.4),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildConfirmation() {
-    final missing = _missingSteps;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Icon(
-          Icons.fact_check_outlined,
-          color: AppColors.green,
-          size: 58,
-        ),
-        const SizedBox(height: 18),
-        const Text(
-          'Have you completed all these configurations?',
-          style: TextStyle(
-            color: AppColors.text,
-            fontSize: 24,
-            fontWeight: FontWeight.w800,
-            height: 1.25,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Text(
-          missing.isEmpty
-              ? 'Everything looks ready. Tap Yes to do one final check.'
-              : '${missing.length} item(s) still need attention. Tap a row to review it.',
-          style: const TextStyle(color: AppColors.muted, fontSize: 14),
-        ),
-        const SizedBox(height: 20),
-        Card(
-          margin: EdgeInsets.zero,
-          child: Column(
-            children: [
-              for (final step in _setupSteps)
-                _ChecklistRow(
-                  step: step,
-                  check: _check(step),
-                  onTap: _canContinue(_check(step))
-                      ? null
-                      : () => _goToStep(_setupSteps.indexOf(step)),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 24),
-        FilledButton(
-          onPressed: _checking ? null : _confirmAll,
-          child: Text(_checking ? 'Checking settings…' : 'Yes, Everything Is Done'),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => _goToStep(
-            missing.isEmpty
-                ? SetupStep.notifications.index
-                : _setupSteps.indexOf(missing.first),
-          ),
-          icon: const Icon(Icons.rate_review_outlined, size: 18),
-          label: const Text('I Need to Review Settings'),
-        ),
-      ],
+    final notifications = step == SetupStep.notifications;
+    final primaryLabel = busy ? 'Working…' : _buttonLabel(step);
+    return _PermissionCard(
+      key: _permissionKeys[step],
+      step: step,
+      check: check,
+      primaryLabel: primaryLabel,
+      onPrimary: busy
+          ? null
+          : notifications
+              ? _requestNotificationPermission
+              : () => _openSettings(step),
+      secondaryLabel: notifications ? 'Open Notification Settings' : null,
+      onSecondary: busy ? null : notifications ? () => _openSettings(step) : null,
+      confirmLabel: _confirmLabel(step),
+      onConfirm: check.state == SetupState.needsConfirmation
+          ? () => _confirmStep(step)
+          : null,
+      refreshLabel: step == SetupStep.accessibility && _status.accessibilityEnabled
+          ? 'Check Again'
+          : null,
+      onRefresh: step == SetupStep.accessibility && _status.accessibilityEnabled
+          ? () => _refresh(showLoading: false)
+          : null,
     );
   }
 
   Widget _buildSuccess() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 36),
-        Container(
-          width: 120,
-          height: 120,
-          decoration: BoxDecoration(
-            color: AppColors.greenDark,
-            shape: BoxShape.circle,
-            border: Border.all(color: AppColors.green, width: 2),
-          ),
-          child: const Icon(Icons.check_rounded, color: AppColors.green, size: 72),
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(Icons.check_circle_rounded, color: AppColors.green, size: 72),
+            const SizedBox(height: 20),
+            const Text(
+              'You’re all set!',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.text,
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Scrollo is ready to track your reels and update your daily progress.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.muted, fontSize: 14, height: 1.5),
+            ),
+            const SizedBox(height: 28),
+            FilledButton(
+              onPressed: _finish,
+              child: const Text('Next'),
+            ),
+          ],
         ),
-        const SizedBox(height: 32),
-        const Text(
-          'You’re all set!',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: AppColors.text,
-            fontSize: 30,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Scrollo is ready to track your reels and update your daily progress.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.muted, fontSize: 15, height: 1.5),
-        ),
-        const SizedBox(height: 36),
-        FilledButton(
-          onPressed: _finish,
-          child: const Text('Next'),
-        ),
-      ],
+      ),
     );
   }
-
 }
 
-class _ChecklistRow extends StatelessWidget {
-  const _ChecklistRow({
+class _PermissionCard extends StatelessWidget {
+  const _PermissionCard({
+    super.key,
     required this.step,
     required this.check,
-    required this.onTap,
+    required this.primaryLabel,
+    required this.onPrimary,
+    this.secondaryLabel,
+    this.onSecondary,
+    this.confirmLabel,
+    this.onConfirm,
+    this.refreshLabel,
+    this.onRefresh,
   });
 
   final SetupStep step;
   final SetupCheck check;
-  final VoidCallback? onTap;
+  final String primaryLabel;
+  final VoidCallback? onPrimary;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
+  final String? confirmLabel;
+  final VoidCallback? onConfirm;
+  final String? refreshLabel;
+  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    final ok = _canContinue(check);
-    return ListTile(
-      onTap: onTap,
-      leading: Icon(
-        ok ? Icons.check_circle_rounded : Icons.error_outline_rounded,
-        color: ok ? AppColors.green : AppColors.danger,
-      ),
-      title: Text(
-        step.title,
-        style: const TextStyle(color: AppColors.text, fontSize: 14, fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        ok ? _stateLabel(check.state) : '${_stateLabel(check.state)} — tap to review',
-        style: TextStyle(color: ok ? AppColors.muted : AppColors.danger, fontSize: 12),
-      ),
-      trailing: ok
-          ? const Icon(Icons.check, color: AppColors.green)
-          : const Text('Review', style: TextStyle(color: AppColors.danger, fontSize: 12)),
-    );
-  }
-
-  bool _canContinue(SetupCheck check) =>
-      check.state == SetupState.verified || check.state == SetupState.notRequired;
-
-  String _stateLabel(SetupState state) => switch (state) {
-        SetupState.notRequired => 'Not required',
-        SetupState.verified => 'Done',
-        SetupState.needsConfirmation => 'Needs confirmation',
-        SetupState.incomplete => 'Incomplete',
-      };
-}
-
-class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.check});
-
-  final SetupCheck check;
-
-  @override
-  Widget build(BuildContext context) {
-    final (color, icon, label) = switch (check.state) {
-      SetupState.verified => (
-          AppColors.green,
-          Icons.verified_rounded,
-          'Verified — you can continue.'
-        ),
-      SetupState.notRequired => (
-          AppColors.muted,
-          Icons.info_outline_rounded,
-          'No action needed on this device.'
-        ),
-      SetupState.needsConfirmation => (
-          AppColors.warning,
-          Icons.help_outline_rounded,
-          'Confirmation needed'
-        ),
-      SetupState.incomplete => (
-          AppColors.danger,
-          Icons.warning_amber_rounded,
-          'Not completed yet'
-        ),
+    final granted = check.state == SetupState.verified ||
+        check.state == SetupState.notRequired;
+    final tone = granted
+        ? StatusTone.success
+        : check.state == SetupState.incomplete
+            ? StatusTone.error
+            : StatusTone.warning;
+    final color = switch (tone) {
+      StatusTone.success => AppColors.green,
+      StatusTone.warning => AppColors.warning,
+      StatusTone.error => AppColors.danger,
+      StatusTone.neutral => AppColors.muted,
     };
+    final statusLabel = granted ? 'Granted' : 'Not Granted';
     return Container(
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.45)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  check.detail,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12, height: 1.4),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InstructionCard extends StatelessWidget {
-  const _InstructionCard({required this.path});
-
-  final String path;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.border),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceLight,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.settings_outlined, color: AppColors.brain, size: 20),
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(step.icon, color: color, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  step.title,
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: onPrimary,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(96, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  side: BorderSide(color: color.withValues(alpha: 0.5)),
+                ),
+                child: Text(
+                  primaryLabel,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              path,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontSize: 13,
-                height: 1.6,
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(
+                granted ? Icons.check_circle_rounded : Icons.warning_amber_rounded,
+                color: color,
+                size: 16,
+              ),
+              const SizedBox(width: 7),
+              Text(
+                statusLabel,
+                style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              StatusPill(label: statusLabel, tone: tone),
+            ],
+          ),
+          if (check.detail.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              check.detail,
+              style: TextStyle(color: granted ? AppColors.muted : color, fontSize: 12, height: 1.4),
+            ),
+          ],
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: AppColors.border),
+          const SizedBox(height: 12),
+          const Text(
+            'How to enable',
+            style: TextStyle(
+              color: AppColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            step.settingsPath,
+            style: const TextStyle(color: AppColors.text, fontSize: 13, height: 1.5),
+          ),
+          if (onSecondary != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onSecondary,
+                icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                label: Text(secondaryLabel ?? 'Open Settings'),
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StepIllustration extends StatelessWidget {
-  const _StepIllustration({required this.icon, required this.state});
-
-  final IconData icon;
-  final SetupState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = switch (state) {
-      SetupState.verified => AppColors.green,
-      SetupState.notRequired => AppColors.brain,
-      SetupState.needsConfirmation => AppColors.warning,
-      SetupState.incomplete => AppColors.danger,
-    };
-    return Container(
-      height: 132,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.surfaceLight, AppColors.surface],
-        ),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Positioned(
-            left: 34,
-            child: Container(
-              width: 82,
-              height: 82,
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: const Icon(Icons.android_rounded, color: AppColors.muted, size: 46),
+          ],
+          if (onConfirm != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: onConfirm,
+              icon: const Icon(Icons.check_circle_outline, size: 16),
+              label: Text(confirmLabel ?? 'I Checked This Setting'),
             ),
-          ),
-          const Positioned(
-            left: 104,
-            top: 28,
-            child: Icon(Icons.arrow_forward_rounded, color: AppColors.green, size: 22),
-          ),
-          Positioned(
-            right: 34,
-            child: Container(
-              width: 82,
-              height: 82,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: color, width: 2),
+          ],
+          if (onRefresh != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: Text(refreshLabel ?? 'Check Again'),
               ),
-              child: Icon(icon, color: color, size: 44),
             ),
-          ),
+          ],
         ],
       ),
     );

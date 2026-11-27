@@ -105,9 +105,10 @@ internal class FloatingBubbleView(context: Context) : View(context) {
     private fun updateBrainColor() {
         brainColor = when {
             dailyTarget <= 0 -> ACCENT
-            count <= dailyTarget / 2 -> ACCENT
-            count <= dailyTarget -> WARNING
-            else -> DANGER
+            count.toDouble() / dailyTarget >= 1.0 -> DANGER
+            count.toDouble() / dailyTarget >= 0.9 -> WARNING
+            count.toDouble() / dailyTarget >= 0.5 -> YELLOW
+            else -> ACCENT
         }
         brainDrawable?.colorFilter = PorterDuffColorFilter(brainColor, PorterDuff.Mode.SRC_IN)
         accentPaint.color = brainColor
@@ -129,6 +130,7 @@ internal class FloatingBubbleView(context: Context) : View(context) {
         const val VIEWPORT_WIDTH = 516.4220444f
         const val VIEWPORT_HEIGHT = 459.4220444f
         val ACCENT = Color.rgb(0xB6, 0xF3, 0x6B)
+        val YELLOW = Color.rgb(0xFF, 0xD5, 0x4F)
         val WARNING = Color.rgb(0xFF, 0xB4, 0x54)
         val DANGER = Color.rgb(0xFF, 0x65, 0x65)
     }

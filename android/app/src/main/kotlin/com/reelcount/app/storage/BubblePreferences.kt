@@ -150,6 +150,7 @@ class BubblePreferences(context: Context) {
     fun resetCounts(): BubbleCounts {
         val cleared = BubbleCounts(date = lastCounterDate)
         setCounts(cleared)
+        resetLimitMilestones()
         return cleared
     }
 
@@ -163,6 +164,26 @@ class BubblePreferences(context: Context) {
         val ids = HashSet(preferences.getStringSet(KEY_PROCESSED_EVENTS, emptySet()).orEmpty())
         ids.add(eventId)
         edit { putStringSet(KEY_PROCESSED_EVENTS, ids) }
+    }
+
+    fun hasNotifiedLimitMilestone(percent: Int): Boolean {
+        ensureToday()
+        return preferences.getStringSet(KEY_LIMIT_MILESTONES_NOTIFIED, emptySet())
+            .orEmpty()
+            .contains("${cachedDate.orEmpty()}:$percent")
+    }
+
+    fun markLimitMilestoneNotified(percent: Int) {
+        ensureToday()
+        val values = HashSet(
+            preferences.getStringSet(KEY_LIMIT_MILESTONES_NOTIFIED, emptySet()).orEmpty(),
+        )
+        values.add("${cachedDate.orEmpty()}:$percent")
+        edit { putStringSet(KEY_LIMIT_MILESTONES_NOTIFIED, values) }
+    }
+
+    fun resetLimitMilestones() {
+        edit { remove(KEY_LIMIT_MILESTONES_NOTIFIED) }
     }
 
     fun getPosition(kind: BubblePositionKind): BubblePosition? {
@@ -222,6 +243,7 @@ class BubblePreferences(context: Context) {
                 putInt(KEY_TOTAL, 0)
                 putString(KEY_LAST_DATE, today)
                 remove(KEY_PROCESSED_EVENTS)
+                remove(KEY_LIMIT_MILESTONES_NOTIFIED)
             }
         }
         cachedDate = today
@@ -297,6 +319,7 @@ class BubblePreferences(context: Context) {
         const val KEY_DAILY_TARGET = "daily_target"
         const val DEFAULT_DAILY_TARGET = 50
         const val KEY_PROCESSED_EVENTS = "processed_event_ids"
+        const val KEY_LIMIT_MILESTONES_NOTIFIED = "limit_milestones_notified"
         const val KEY_APP_TASK_ACTIVE = "app_task_active"
         const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
         const val KEY_DAILY_REMINDER_ENABLED = "daily_reminder_enabled"

@@ -36,6 +36,7 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
     private var lastScrollX: Int = Int.MIN_VALUE
     private var lastScrollY: Int = Int.MIN_VALUE
     private var lastTransitionDirection: Int = 0
+    private var lastScrollCountAt: Long = 0L
 
     private val lastFailureAt = HashMap<String, Long>()
     private var sessionNonce: String = "session"
@@ -83,12 +84,23 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
                 }
 
                 AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                    trackScroll(platform, currentEvent)
+                    when (trackScroll(platform, currentEvent)) {
+                        ScrollTransition.DOWN -> Unit
+                        ScrollTransition.UP -> {
+                            if (pendingTransition) {
+                                pendingTransition = false
+                                lastTransitionDirection = 0
+                                Log.d(TAG, "SCROLL_TRANSITION_CANCELLED direction=up epoch=$transitionEpoch")
+                            }
+                        }
+                        ScrollTransition.NONE -> Unit
+                    }
                     scheduleDetect(
                         platform,
                         packageName,
                         0L,
                         fromScroll = platform in NAVIGATION_FIX_PLATFORMS,
+                        fromScrollEvent = true,
                     )
                 }
 
@@ -129,16 +141,18 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         packageName: String,
         delayMs: Long,
         fromScroll: Boolean = false,
+        fromScrollEvent: Boolean = false,
     ) {
         if (!fromScroll && pendingScrollDetect && platform in NAVIGATION_FIX_PLATFORMS) {
             return
         }
         cancelPendingDetect()
         pendingScrollDetect = fromScroll
+        val detectFromScroll = fromScrollEvent
         val runnable = Runnable {
             pendingDetect = null
             pendingScrollDetect = false
-            runDetect(platform, packageName)
+            runDetect(platform, packageName, detectFromScroll)
         }
         pendingDetect = runnable
         detectHandler.postDelayed(runnable, delayMs)
@@ -150,13 +164,13 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         pendingScrollDetect = false
     }
 
-    private fun runDetect(platform: BubblePlatform, packageName: String) {
+    private fun runDetect(platform: BubblePlatform, packageName: String, fromScrollEvent: Boolean) {
         if (detecting) {
             return
         }
         detecting = true
         try {
-            detect(platform, packageName)
+            detect(platform, packageName, fromScrollEvent)
         } catch (error: SecurityException) {
             reportError("Accessibility tree access denied", error)
         } catch (error: RuntimeException) {
@@ -187,31 +201,64 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         lastScrollX = Int.MIN_VALUE
         lastScrollY = Int.MIN_VALUE
         lastTransitionDirection = 0
+        lastScrollCountAt = 0L
     }
 
-    private fun trackScroll(platform: BubblePlatform, event: AccessibilityEvent) {
+    private fun trackScroll(platform: BubblePlatform, event: AccessibilityEvent): ScrollTransition {
         val prioritized = platform in NAVIGATION_FIX_PLATFORMS
         if (!prioritized && !sessionActive && lastKey == null) {
-            return
+            return ScrollTransition.NONE
         }
         val motion = scrollMotion(event)
-        val threshold = if (platform == BubblePlatform.YOUTUBE) {
-            YOUTUBE_SCROLL_THRESHOLD
-        } else {
-            SCROLL_THRESHOLD
+        if (motion.direction < 0) {
+            return ScrollTransition.UP
+        }
+        if (!isNextReelScroll(motion.direction)) {
+            return ScrollTransition.NONE
+        }
+        val threshold = when (platform) {
+            BubblePlatform.YOUTUBE -> YOUTUBE_SCROLL_THRESHOLD
+            BubblePlatform.INSTAGRAM -> INSTAGRAM_SCROLL_THRESHOLD
+            else -> SCROLL_THRESHOLD
         }
         val effectiveMagnitude =
             if (prioritized && motion.magnitude <= 0) 1 else motion.magnitude
-        if (effectiveMagnitude >= threshold) {
-            pendingTransition = true
-            transitionEpoch++
-            lastTransitionDirection = motion.direction
+        if (effectiveMagnitude < threshold) {
             Log.d(
                 TAG,
-                "SCROLL_TRANSITION magnitude=${motion.magnitude} effective=$effectiveMagnitude " +
+                "SCROLL_TRANSITION_IGNORED reason=threshold platform=${platform.key} " +
+                    "magnitude=$effectiveMagnitude threshold=$threshold " +
+                    "direction=${directionLabel(platform, motion.direction)}",
+            )
+            return ScrollTransition.NONE
+        }
+        if (pendingTransition) {
+            Log.d(
+                TAG,
+                "SCROLL_TRANSITION_COALESCED direction=${directionLabel(platform, motion.direction)} " +
+                    "epoch=$transitionEpoch",
+            )
+            return ScrollTransition.DOWN
+        }
+        val now = SystemClock.elapsedRealtime()
+        val cooldownMs = scrollCooldownMs(platform)
+        if (now - lastScrollCountAt < cooldownMs) {
+            Log.d(
+                TAG,
+                "SCROLL_TRANSITION_IGNORED reason=cooldown cooldown=$cooldownMs " +
                     "direction=${directionLabel(platform, motion.direction)} epoch=$transitionEpoch",
             )
+            return ScrollTransition.NONE
         }
+        pendingTransition = true
+        transitionEpoch++
+        lastTransitionDirection = motion.direction
+        Log.d(
+            TAG,
+            "SCROLL_TRANSITION magnitude=${motion.magnitude} effective=$effectiveMagnitude " +
+                "direction=${directionLabel(platform, motion.direction)} epoch=$transitionEpoch",
+        )
+        return ScrollTransition.DOWN
     }
 
     private fun scrollMotion(event: AccessibilityEvent): ScrollMotion {
@@ -246,13 +293,22 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
 
     private fun directionLabel(platform: BubblePlatform, direction: Int): String = when {
         direction == 0 -> "unknown"
-        platform == BubblePlatform.YOUTUBE && direction < 0 -> "next"
+        platform == BubblePlatform.YOUTUBE && direction > 0 -> "next"
         platform == BubblePlatform.YOUTUBE -> "previous"
-        direction < 0 -> "down"
+        direction > 0 -> "down"
         else -> "up"
     }
 
-    private fun detect(platform: BubblePlatform, packageName: String) {
+    private fun isNextReelScroll(direction: Int): Boolean = direction > 0
+
+    private fun scrollCooldownMs(platform: BubblePlatform): Long =
+        if (platform == BubblePlatform.INSTAGRAM) {
+            INSTAGRAM_SCROLL_COOLDOWN_MS
+        } else {
+            SCROLL_COUNT_COOLDOWN_MS
+        }
+
+    private fun detect(platform: BubblePlatform, packageName: String, fromScrollEvent: Boolean) {
         val root = resolveRoot(packageName)
         if (root == null) {
             logStage("VIEWER_DETECTION_FAILED", "platform=${platform.key} reason=no-root-window")
@@ -282,13 +338,17 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         )
 
         val baseKey = "${platform.key}:${identity.value}"
-        val newByTransition = pendingTransition && transitionEpoch != lastCountedEpoch
+        val newByTransition = pendingTransition &&
+            transitionEpoch != lastCountedEpoch &&
+            isNextReelScroll(lastTransitionDirection)
+        val initialDetection = lastKey == null && !fromScrollEvent
         val revisiting = recentKeys.contains(baseKey) && !newByTransition
-        val isNew = (baseKey != lastKey || newByTransition) && !revisiting
+        val isNew = (initialDetection || newByTransition) && !revisiting
         logStage(
             "DUPLICATE_CHECK",
             "platform=${platform.key} new=$isNew revisiting=$revisiting " +
-                "pending=$pendingTransition direction=${directionLabel(platform, lastTransitionDirection)} " +
+                "pending=$pendingTransition initial=$initialDetection scroll=$fromScrollEvent " +
+                "direction=${directionLabel(platform, lastTransitionDirection)} " +
                 "epoch=$transitionEpoch label=${identity.label}",
         )
         if (!isNew) {
@@ -305,6 +365,9 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
         lastKey = baseKey
         rememberKey(baseKey)
         lastCountedEpoch = transitionEpoch
+        if (newByTransition) {
+            lastScrollCountAt = SystemClock.elapsedRealtime()
+        }
         pendingTransition = false
         logStage(
             "REEL_RECORDED",
@@ -821,6 +884,8 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
 
     private data class ScrollMotion(val magnitude: Int, val direction: Int)
 
+    private enum class ScrollTransition { NONE, DOWN, UP }
+
     private data class ReelIdentity(val value: String, val label: String, val stable: Boolean)
 
     private val verboseTreeDump: Boolean
@@ -862,6 +927,9 @@ class ReelDetectionAccessibilityService : AccessibilityService() {
 
         private const val SCROLL_THRESHOLD = 60
         private const val YOUTUBE_SCROLL_THRESHOLD = 1
+        private const val INSTAGRAM_SCROLL_THRESHOLD = 1
+        private const val SCROLL_COUNT_COOLDOWN_MS = 500L
+        private const val INSTAGRAM_SCROLL_COOLDOWN_MS = 100L
         private const val SETTLE_DELAY_MS = 500L
         private const val FAILURE_LOG_INTERVAL_MS = 3000L
 

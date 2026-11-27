@@ -21,22 +21,21 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> completeWizard(WidgetTester tester) async {
-    await tapText(tester, 'Start Setup');
-    await tapText(tester, 'Continue');
-    await tapText(tester, 'Continue');
-    await tapText(tester, 'I Turned It On / Not Available');
-    await tapText(tester, 'Continue');
-    await tapText(tester, 'Continue');
-    expect(find.text('ADVANCED SETTINGS'), findsOneWidget);
-    await tapText(tester, 'I Allowed Restricted Settings');
-    await tapText(tester, 'Continue');
-    expect(find.textContaining('Scrollo uses Accessibility'), findsOneWidget);
+  Future<void> tapFirst(WidgetTester tester, String text) async {
+    final finder = find.text(text).first;
+    await tester.ensureVisible(finder);
+    await tester.pumpAndSettle();
+    await tester.tap(finder);
+    await tester.pumpAndSettle();
   }
 
-  testWidgets('onboarding starts with notifications and keeps accessibility last', (
-    tester,
-  ) async {
+  Future<void> completeSetup(WidgetTester tester) async {
+    await tapText(tester, 'I Turned It On / Not Available');
+    await tapText(tester, 'I Allowed Restricted Settings');
+    await tapText(tester, 'Finish Setup');
+  }
+
+  testWidgets('all permissions appear on one screen', (tester) async {
     final service = FakeOnboardingService();
     final storage = InMemoryOnboardingStorage();
     await tester.pumpWidget(
@@ -44,28 +43,48 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('STEP 1 OF 7'), findsOneWidget);
     expect(find.text('Notifications'), findsOneWidget);
-    expect(find.text('Accessibility Service'), findsNothing);
-    expect(find.text('Open Accessibility Settings'), findsNothing);
-
-    await completeWizard(tester);
-
-    await tapText(tester, 'Open Accessibility Settings');
-
-    expect(service.calls.last, FloatingBubbleMethod.requestAccessibilityPermission);
-    expect(
-      service.calls.indexOf(FloatingBubbleMethod.requestAccessibilityPermission),
-      greaterThan(service.calls.indexOf(FloatingBubbleMethod.requestOverlayPermission)),
-    );
+    expect(find.text('Display Over Other Apps'), findsOneWidget);
+    expect(find.text('Background Activity & Battery'), findsOneWidget);
+    expect(find.text('Auto Background Start'), findsOneWidget);
+    expect(find.text('Pause App Activity If Unused'), findsOneWidget);
+    expect(find.text('Allow Restricted Settings'), findsOneWidget);
+    expect(find.text('Accessibility Service'), findsOneWidget);
+    expect(find.text('STEP 1 OF 7'), findsNothing);
     expect(find.text('Have you completed all these configurations?'), findsNothing);
+    expect(
+      find.text('Settings → Accessibility → Downloaded Apps → Scrollo → Enable'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('accessibility settings stay closed until restricted settings are confirmed', (
+  testWidgets('every grant button opens the correct settings', (tester) async {
+    final service = FakeOnboardingService();
+    await tester.pumpWidget(
+      ReelCountApp(service: service, storage: InMemoryOnboardingStorage()),
+    );
+    await tester.pumpAndSettle();
+
+    await tapText(tester, 'Grant Notifications');
+    await tapText(tester, 'Open Display Settings');
+    await tapText(tester, 'Open Battery Settings');
+    await tapText(tester, 'Open Auto-Start Settings');
+    await tapFirst(tester, 'Open App Info Settings');
+    await tapText(tester, 'Open Accessibility Settings');
+
+    expect(service.calls, contains(FloatingBubbleMethod.requestNotificationPermission));
+    expect(service.calls, contains(FloatingBubbleMethod.requestOverlayPermission));
+    expect(service.calls, contains(FloatingBubbleMethod.requestBackgroundActivity));
+    expect(service.calls, contains(FloatingBubbleMethod.requestAutoBackgroundStart));
+    expect(service.calls, contains(FloatingBubbleMethod.requestPauseAppActivity));
+    expect(service.calls, contains(FloatingBubbleMethod.requestAccessibilityPermission));
+  });
+
+  testWidgets('restricted settings stays an advanced confirmation requirement', (
     tester,
   ) async {
     final service = FakeOnboardingService();
-    final storage = InMemoryOnboardingStorage(step: SetupStep.confirmation.index);
+    final storage = InMemoryOnboardingStorage();
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.dark,
@@ -79,21 +98,20 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tapText(tester, 'Accessibility Service');
-    await tapText(tester, 'Open Accessibility Settings');
-
     expect(
-      service.calls,
-      isNot(contains(FloatingBubbleMethod.requestAccessibilityPermission)),
+      find.textContaining('Settings → Apps → Scrollo → Three-dot menu'),
+      findsOneWidget,
     );
-    expect(find.text('Allow Restricted Settings'), findsOneWidget);
-    expect(find.textContaining('Tap the three-dot menu'), findsOneWidget);
+    expect(find.text('I Allowed Restricted Settings'), findsOneWidget);
 
-    await tapText(tester, 'Open App Info Settings');
-    expect(service.calls, contains(FloatingBubbleMethod.requestPauseAppActivity));
+    await tapText(tester, 'I Allowed Restricted Settings');
+
+    expect(storage.confirmed, contains(SetupStep.restrictedSettings.name));
+    expect(find.text('I Allowed Restricted Settings'), findsNothing);
+    expect(service.calls, isEmpty);
   });
 
-  testWidgets('final confirmation identifies incomplete settings and sends user back', (
+  testWidgets('final check identifies incomplete settings without marking them granted', (
     tester,
   ) async {
     final service = FakeOnboardingService()..overlayGranted = false;
@@ -112,35 +130,29 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Have you completed all these configurations?'), findsOneWidget);
-    expect(find.textContaining('still need attention'), findsOneWidget);
+    await tapText(tester, 'Done');
 
-    await tapText(tester, 'Yes, Everything Is Done');
-
-    expect(find.text('Display Over Other Apps'), findsWidgets);
     expect(
       find.text('Display over other apps is not enabled yet.'),
       findsOneWidget,
     );
+    expect(find.textContaining('Still incomplete'), findsOneWidget);
     expect(find.textContaining('all set'), findsNothing);
+    expect(storage.completed, isFalse);
   });
 
   testWidgets('successful onboarding is remembered and opens the clean dashboard', (
     tester,
   ) async {
-    final service = FakeOnboardingService();
+    final service = FakeOnboardingService()..accessibilityEnabled = true;
     final storage = InMemoryOnboardingStorage();
     await tester.pumpWidget(
       ReelCountApp(service: service, storage: storage),
     );
     await tester.pumpAndSettle();
 
-    await completeWizard(tester);
-    await tapText(tester, 'Open Accessibility Settings');
-    await tapText(tester, 'Continue');
+    await completeSetup(tester);
 
-    expect(find.text('Have you completed all these configurations?'), findsOneWidget);
-    await tapText(tester, 'Yes, Everything Is Done');
     expect(find.textContaining('all set'), findsOneWidget);
 
     await tapText(tester, 'Next');
@@ -148,6 +160,38 @@ void main() {
     expect(storage.completed, isTrue);
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('Enable Accessibility'), findsNothing);
+  });
+
+  testWidgets('reopening after completed setup opens permissions instead of success', (
+    tester,
+  ) async {
+    final service = FakeOnboardingService()..accessibilityEnabled = false;
+    final storage = InMemoryOnboardingStorage(
+      completed: true,
+      step: SetupStep.success.index,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: OnboardingFlow(
+          service: service,
+          storage: storage,
+          startAtConfirmation: true,
+          onFinished: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Everything Scrollo needs, in one place.'), findsOneWidget);
+    expect(find.text('Accessibility Service'), findsOneWidget);
+    expect(find.text('You’re all set!'), findsNothing);
+
+    final scrollView = find.byType(SingleChildScrollView);
+    expect(
+      tester.widget<SingleChildScrollView>(scrollView).controller?.offset ?? 0,
+      greaterThan(0),
+    );
   });
 }
 

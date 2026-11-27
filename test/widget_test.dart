@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:reelcount/main.dart';
 import 'package:reelcount/screens/home_screen.dart';
+import 'package:reelcount/screens/onboarding_screen.dart';
 import 'package:reelcount/services/floating_bubble_service.dart';
 import 'package:reelcount/services/onboarding_storage.dart';
 import 'package:reelcount/theme/app_theme.dart';
@@ -79,9 +80,17 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> openSetupChecklist(WidgetTester tester) async {
+  Future<void> tapFirst(WidgetTester tester, String text) async {
+    final finder = find.text(text).first;
+    await tester.ensureVisible(finder);
+    await tester.pumpAndSettle();
+    await tester.tap(finder);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> openSetupDashboard(WidgetTester tester) async {
     await tapText(tester, 'Setup & Permissions');
-    expect(find.text('Have you completed all these configurations?'), findsOneWidget);
+    expect(find.text('Everything Scrollo needs, in one place.'), findsOneWidget);
   }
 
   setUp(() {
@@ -171,6 +180,60 @@ void main() {
     expect(find.text('-1'), findsNothing);
   });
 
+  testWidgets('setup statuses refresh after returning from settings', (tester) async {
+    status = buildStatus(
+      counterMap: counter,
+      bubbleRunning: true,
+      accessibilityEnabled: true,
+      detectionState: 'active',
+      overlayPermissionGranted: false,
+    );
+    await pumpDashboard(tester);
+    await openSetupDashboard(tester);
+
+    expect(
+      find.text('Display over other apps is not enabled yet.'),
+      findsOneWidget,
+    );
+
+    status = buildStatus(
+      counterMap: counter,
+      bubbleRunning: true,
+      accessibilityEnabled: true,
+      detectionState: 'active',
+      overlayPermissionGranted: true,
+    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Display over other apps is not enabled yet.'),
+      findsNothing,
+    );
+    expect(find.text('Display over other apps is enabled.'), findsOneWidget);
+  });
+
+  testWidgets('setup and permissions reopens the permissions screen after completion', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ReelCountApp(
+        key: UniqueKey(),
+        storage: InMemoryOnboardingStorage(
+          completed: true,
+          step: SetupStep.success.index,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tapText(tester, 'Setup & Permissions');
+
+    expect(find.text('Everything Scrollo needs, in one place.'), findsOneWidget);
+    expect(find.text('Accessibility Service'), findsOneWidget);
+    expect(find.text('You’re all set!'), findsNothing);
+  });
+
   testWidgets('bottom navigation opens insights, history, and settings', (tester) async {
     await pumpDashboard(tester);
 
@@ -198,9 +261,7 @@ void main() {
       backgroundActivityStatus: 'restricted',
     );
     await pumpDashboard(tester);
-    await openSetupChecklist(tester);
-
-    await tapText(tester, 'Background Activity & Battery');
+    await openSetupDashboard(tester);
 
     expect(
       find.text('Background activity is restricted for Scrollo.'),
@@ -217,8 +278,7 @@ void main() {
       backgroundActivityStatus: 'unknown',
     );
     await pumpDashboard(tester);
-    await openSetupChecklist(tester);
-    await tapText(tester, 'Background Activity & Battery');
+    await openSetupDashboard(tester);
 
     expect(
       find.text('Your device does not share a reliable background activity status.'),
@@ -229,15 +289,12 @@ void main() {
 
   testWidgets('background setting shortcuts open system settings', (tester) async {
     await pumpDashboard(tester);
-    await openSetupChecklist(tester);
+    await openSetupDashboard(tester);
 
-    await tapText(tester, 'Auto Background Start');
     await tapText(tester, 'Open Auto-Start Settings');
     expect(methodCalls, contains(FloatingBubbleMethod.requestAutoBackgroundStart));
 
-    await tapText(tester, 'I Turned It On / Not Available');
-    await tapText(tester, 'Continue');
-    await tapText(tester, 'Open App Info Settings');
+    await tapFirst(tester, 'Open App Info Settings');
     expect(methodCalls, contains(FloatingBubbleMethod.requestPauseAppActivity));
   });
 
